@@ -50,20 +50,28 @@
 
 <main id="view-settings" class="view" hidden>
   <div class="settings-wrap">
+    <div class="page-head">
+      <button id="btnBack" class="icon-btn back-btn" aria-label="Back" title="Back">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      </button>
+      <div>
+        <h2>Settings</h2>
+        <div class="page-sub">Manage app preferences and theme.</div>
+      </div>
+    </div>
     <section class="card">
-      <h3 class="card-title">GENERAL</h3>
+      <h3 class="card-title">Appearance</h3>
       <div class="theme-row" id="themeRow">
         <button class="theme-btn" data-theme="light">Light</button>
         <button class="theme-btn" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="oled">OLED</button>
       </div>
     </section>
     <section class="card">
       <h3 class="card-title">MORE</h3>
-      <button class="set-row" id="rowShare">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
-        <span>Share App</span><span class="chev">›</span>
-      </button>
+      <a class="set-row" href="https://github.com/mhasanbogura/appstore/releases/latest/download/AppStore.apk">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+        <span>Download Android App</span><span class="chev">›</span>
+      </a>
       <hr class="set-div">
       <button class="set-row" id="rowAbout">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>

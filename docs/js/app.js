@@ -484,13 +484,16 @@
     b.addEventListener('click', function () { setTheme(b.getAttribute('data-theme')); });
   });
 
-  $('rowShare').addEventListener('click', shareApp);
   $('rowAbout').addEventListener('click', openAbout);
   $('rowContact').addEventListener('click', openContact);
+  $('btnBack').addEventListener('click', function () { show('home'); });
 
-  // ---------- init (no login) ----------
+  // ---------- init (no login), default Light ----------
   var savedTheme = 'light';
-  try { savedTheme = localStorage.getItem('appstore-theme') || 'light'; } catch (e) {}
+  try {
+    var st = localStorage.getItem('appstore-theme');
+    savedTheme = (st === 'dark') ? 'dark' : 'light';
+  } catch (e) {}
   setTheme(savedTheme);
   loadApps();
 })();

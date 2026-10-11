@@ -115,6 +115,11 @@ body {
 .empty-state { text-align: center; color: var(--text-2); padding: 40px 16px; font-size: 14px; }
 
 /* ---------- settings ---------- */
+/* ---------- settings ---------- */
+.page-head { display: flex; align-items: center; gap: 12px; padding: 4px 0 12px; }
+.page-head .back-btn { background: var(--surface); border: 1px solid var(--border); }
+.page-head h2 { font-size: 22px; line-height: 26px; font-weight: 700; margin: 0; }
+.page-sub { font-size: 10px; line-height: 14px; color: var(--text-2); margin-top: 2px; }
 .settings-wrap { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
 .card {
   background: var(--surface); border: 1px solid var(--border);
