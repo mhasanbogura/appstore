@@ -54,7 +54,7 @@ body {
 }
 .brand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; cursor: pointer; }
 .brand-logo { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; }
-.brand-text strong { display: block; font-size: 22px; line-height: 26px; font-weight: 500; }
+.brand-text strong { display: block; font-size: 22px; line-height: 26px; font-weight: 700; }
 .brand-sub { font-size: 10px; line-height: 14px; color: var(--text-2); }
 .icon-btn {
   background: transparent; border: 0; border-radius: 10px;
