@@ -121,6 +121,7 @@
       versionName: verName, versionCode: verCode,
       size: parseInt(f.size || '0', 10) || 0,
       fileName: f.name, mdId: mdId, iconUrl: icon,
+      inlineDesc: '',
       downloadUrl: 'https://drive.google.com/uc?export=download&id=' + f.id
     };
   }
@@ -142,8 +143,51 @@
           mdMap[f.name.replace(/\.md$/i, '').trim()] = f.id;
         }
       });
-      return apps.map(function (f) { return parseFile(f, API_KEY, iconMap, mdMap); });
+      return {
+        apps: apps.map(function (f) { return parseFile(f, API_KEY, iconMap, mdMap); }),
+        icons: iconMap, mds: mdMap
+      };
     });
+  }
+
+  function siblingKey(n) {
+    var k = String(n || '').trim();
+    if (/\.md$/i.test(k)) k = k.slice(0, -3);
+    var m = k.match(/\.(png|PNG|jpg|jpeg|webp)$/);
+    if (m) k = k.slice(0, -m[0].length);
+    return k.trim();
+  }
+
+  function parseManifestEntry(o, iconMap, mdMap) {
+    if (!o || !o.packageName || !o.name) return null;
+    var icon = o.iconUrl || '';
+    if (!icon && o.iconFileName) {
+      var fileId = iconMap[siblingKey(o.iconFileName)];
+      if (fileId) icon = API + '/' + fileId + '?alt=media&key=' + API_KEY;
+    }
+    var mdId = o.mdFileName ? (mdMap[siblingKey(o.mdFileName)] || null) : null;
+    return {
+      id: 'manifest_' + o.packageName,
+      packageName: o.packageName, name: o.name,
+      versionName: o.versionName || '1.0', versionCode: o.versionCode || 1,
+      size: o.size || 0, fileName: o.fileName || '', mdId: mdId,
+      iconUrl: icon, downloadUrl: o.downloadUrl || '',
+      inlineDesc: mdId ? '' : (o.description || ''),
+      platform: o.platform || 'Android'
+    };
+  }
+
+  function fetchManifest(folderId) {
+    return driveGet({
+      q: "'" + folderId + "' in parents and name = 'store_manifest.json' and trashed = false",
+      key: API_KEY, fields: 'files(id)'
+    }).then(function (d) {
+      if (!d.files || !d.files[0]) return [];
+      return fetch(API + '/' + d.files[0].id + '?alt=media&key=' + API_KEY).then(function (r) {
+        if (!r.ok) return [];
+        return r.json().catch(function () { return []; });
+      });
+    }).catch(function () { return []; });
   }
 
   function dedupe(list) {
@@ -164,9 +208,28 @@
     findSubfolder(ROOT_FOLDER, state.platform).then(function (subId) {
       var jobs = [parseFolder(ROOT_FOLDER, state.platform)];
       if (subId) jobs.push(parseFolder(subId, state.platform));
+      jobs.push(fetchManifest(ROOT_FOLDER));
       return Promise.all(jobs);
     }).then(function (parts) {
-      var all = dedupe(parts[0].concat(parts[1] || []));
+      var manifest = parts[parts.length - 1] || [];
+      var folders = parts.slice(0, parts.length - 1);
+      var iconMap = {}, mdMap = {}, all = [];
+      folders.forEach(function (f) {
+        if (!f) return;
+        Object.keys(f.icons).forEach(function (k) { if (!iconMap[k]) iconMap[k] = f.icons[k]; });
+        Object.keys(f.mds).forEach(function (k) { if (!mdMap[k]) mdMap[k] = f.mds[k]; });
+        all = all.concat(f.apps);
+      });
+      manifest.forEach(function (m) {
+        var app = parseManifestEntry(m, iconMap, mdMap);
+        if (!app || app.platform !== state.platform) return;
+        var idx = -1;
+        for (var i = 0; i < all.length; i++) {
+          if (all[i].packageName === app.packageName) { idx = i; break; }
+        }
+        if (idx >= 0) all[idx] = app; else all.push(app);
+      });
+      all = dedupe(all);
       all.sort(function (a, b) { return a.name.localeCompare(b.name); });
       state.apps = all;
       state.storeApp = all.find(function (a) { return a.packageName === 'com.mahmuduls.appstore'; }) || null;
@@ -316,6 +379,8 @@
     }
     if (app.mdId) {
       fetchMd(app.mdId).then(finishDesc).catch(function () { finishDesc(''); });
+    } else if (app.inlineDesc) {
+      finishDesc(app.inlineDesc);
     } else {
       finishDesc('Discovered APK from Google Drive: ' + app.fileName + '.');
     }
