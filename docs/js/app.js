@@ -77,7 +77,7 @@
     return name;
   }
 
-  function parseFile(f, apiKey, iconMap, mdMap) {
+  function parseFile(f, apiKey, iconMap, mdMap, platform) {
     var stripped = stripExt(f.name, ['.apk', '.zip']);
     var verName = '1.0', verCode = 1;
 
@@ -121,7 +121,7 @@
       versionName: verName, versionCode: verCode,
       size: parseInt(f.size || '0', 10) || 0,
       fileName: f.name, mdId: mdId, iconUrl: icon,
-      inlineDesc: '',
+      inlineDesc: '', platform: platform || 'Android',
       downloadUrl: 'https://drive.google.com/uc?export=download&id=' + f.id
     };
   }
@@ -144,7 +144,7 @@
         }
       });
       return {
-        apps: apps.map(function (f) { return parseFile(f, API_KEY, iconMap, mdMap); }),
+        apps: apps.map(function (f) { return parseFile(f, API_KEY, iconMap, mdMap, platform); }),
         icons: iconMap, mds: mdMap
       };
     });
@@ -251,18 +251,15 @@
           if (subId) jobs.push(parseFolder(subId, state.platform));
           jobs.push(otherSubId ? parseFolder(otherSubId, otherPlatform) : Promise.resolve(null));
           jobs.push(webId ? listFolderMaps(webId) : Promise.resolve(null));
-          jobs.push(fetchManifestSafe(ROOT_FOLDER));
-          jobs.push(webId ? fetchManifestSafe(webId) : Promise.resolve([]));
+          jobs.push(webId ? fetchManifest(webId) : Promise.resolve([]));
           return Promise.all(jobs);
         });
       });
     }).then(function (parts) {
-      var rootManifest = parts[parts.length - 2] || [];
-      var webManifest = parts[parts.length - 1] || [];
-      var manifest = rootManifest.concat(webManifest);
-      var appFolders = parts.slice(0, parts.length - 4);
-      var otherMaps = parts[parts.length - 4];
-      var webMaps = parts[parts.length - 3];
+      var manifest = parts[parts.length - 1] || [];
+      var appFolders = parts.slice(0, parts.length - 3);
+      var otherMaps = parts[parts.length - 3];
+      var webMaps = parts[parts.length - 2];
       var iconMap = {}, mdMap = {}, all = [];
       function mergeMaps(f) {
         if (!f) return;
@@ -308,7 +305,7 @@
         (a.iconUrl ? '<img class="app-icon" loading="lazy" src="' + esc(a.iconUrl) + '" alt="">' :
           '<div class="app-icon" style="display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px;color:var(--primary)">' + esc(a.name.charAt(0).toUpperCase()) + '</div>') +
         '<div class="app-info"><div class="app-name">' + esc(a.name) + '</div>' +
-        '<div class="app-pkg">' + esc(a.packageName) + '</div>' +
+        (a.platform === 'Windows' ? '' : '<div class="app-pkg">' + esc(a.packageName) + '</div>') +
         '<div class="app-ver">v' + esc(a.versionName) + (a.size ? ' • ' + esc(fmtSize(a.size)) : '') + '</div></div>' +
         '<a class="btn-download" href="' + esc(a.downloadUrl) + '" data-dl="' + i + '">Download</a>' +
         '</div>';
@@ -382,7 +379,8 @@
     $('mDownload').textContent = 'Download';
     $('mDownload').href = app.downloadUrl;
     $('mName').textContent = app.name;
-    $('mPkg').textContent = app.packageName;
+    $('mPkg').textContent = app.platform === 'Windows' ? '' : app.packageName;
+    $('mPkg').style.display = app.platform === 'Windows' ? 'none' : '';
     $('mVer').textContent = 'v' + app.versionName + (app.size ? ' • ' + fmtSize(app.size) : '');
     $('mDesc').innerHTML = 'Loading description...';
     $('mActions').innerHTML = '';
@@ -471,6 +469,7 @@
     var s = state.storeApp;
     $('mName').textContent = 'App Store';
     $('mPkg').textContent = 'com.mahmuduls.appstore';
+    $('mPkg').style.display = '';
     $('mVer').textContent = s ? 'v' + s.versionName : '';
     $('mDesc').textContent = 'Loading description...';
     $('modal').hidden = false;
@@ -487,6 +486,7 @@
     $('mDownload').style.display = 'none';
     $('mName').textContent = 'Contact Developer';
     $('mPkg').textContent = '';
+    $('mPkg').style.display = '';
     $('mVer').textContent = '';
     $('mDesc').innerHTML = 'Loading...';
     $('modal').hidden = false;
