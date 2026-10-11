@@ -376,20 +376,6 @@
     return m ? m[0] : null;
   }
 
-  function overviewOf(text) {
-    var lines = text.split('\n'), out = [], started = false;
-    for (var i = 0; i < lines.length; i++) {
-      var t = lines[i].trim();
-      if (!started) {
-        if (t.toLowerCase() === '## overview') started = true;
-        continue;
-      }
-      if (t.indexOf('## ') === 0) break;
-      if (t) out.push(t);
-    }
-    return out.join(' ').replace(/\*\*/g, '').replace(/(^|\s)[*-] /g, ' ').trim();
-  }
-
   function openModal(app) {
     $('mIcon').src = app.iconUrl || 'icons/icon.png';
     $('mDownload').style.display = '';
@@ -411,19 +397,11 @@
       if (settings) btns += '<button class="btn-outline" data-act="copy">Copy Settings</button>';
       var linkUrl = firstUrl(sectionAfter(clean, 'link'));
       if (linkUrl) btns += '<a class="btn-outline" href="' + esc(linkUrl) + '" target="_blank" rel="noopener">Open Link</a>';
-      btns += '<button class="btn-outline" data-act="share">Share App</button>';
       $('mActions').innerHTML = btns;
       $('mActions').querySelectorAll('button').forEach(function (b) {
         b.addEventListener('click', function () {
-          if (b.getAttribute('data-act') === 'copy') {
-            var t = settings.replace(/\\_/g, '_');
-            if (navigator.clipboard) navigator.clipboard.writeText(t).then(function () { toast('Settings copied'); });
-          } else {
-            var ov = overviewOf(clean).slice(0, 200);
-            var st = 'Check out ' + app.name + ' — ' + ov + '\n\nDownload: ' + app.downloadUrl;
-            if (navigator.share) navigator.share({ title: app.name, text: st }).catch(function () {});
-            else if (navigator.clipboard) navigator.clipboard.writeText(st).then(function () { toast('Share text copied'); });
-          }
+          var t = settings.replace(/\\_/g, '_');
+          if (navigator.clipboard) navigator.clipboard.writeText(t).then(function () { toast('Settings copied'); });
         });
       });
       $('mActions')._app = app;
