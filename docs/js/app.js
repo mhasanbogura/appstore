@@ -205,21 +205,27 @@
     empty.hidden = true;
     $('pullHint').hidden = false;
 
+    var otherPlatform = state.platform === 'Android' ? 'Windows' : 'Android';
     findSubfolder(ROOT_FOLDER, state.platform).then(function (subId) {
-      var jobs = [parseFolder(ROOT_FOLDER, state.platform)];
-      if (subId) jobs.push(parseFolder(subId, state.platform));
-      jobs.push(fetchManifest(ROOT_FOLDER));
-      return Promise.all(jobs);
+      return findSubfolder(ROOT_FOLDER, otherPlatform).then(function (otherSubId) {
+        var jobs = [parseFolder(ROOT_FOLDER, state.platform)];
+        if (subId) jobs.push(parseFolder(subId, state.platform));
+        jobs.push(otherSubId ? parseFolder(otherSubId, otherPlatform) : Promise.resolve(null));
+        jobs.push(fetchManifest(ROOT_FOLDER));
+        return Promise.all(jobs);
+      });
     }).then(function (parts) {
       var manifest = parts[parts.length - 1] || [];
-      var folders = parts.slice(0, parts.length - 1);
+      var appFolders = parts.slice(0, parts.length - 2);
+      var otherMaps = parts[parts.length - 2];
       var iconMap = {}, mdMap = {}, all = [];
-      folders.forEach(function (f) {
+      function mergeMaps(f) {
         if (!f) return;
         Object.keys(f.icons).forEach(function (k) { if (!iconMap[k]) iconMap[k] = f.icons[k]; });
         Object.keys(f.mds).forEach(function (k) { if (!mdMap[k]) mdMap[k] = f.mds[k]; });
-        all = all.concat(f.apps);
-      });
+      }
+      appFolders.forEach(function (f) { if (f) all = all.concat(f.apps); mergeMaps(f); });
+      mergeMaps(otherMaps);
       manifest.forEach(function (m) {
         var app = parseManifestEntry(m, iconMap, mdMap);
         if (!app || app.platform !== state.platform) return;
