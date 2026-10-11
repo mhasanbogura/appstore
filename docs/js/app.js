@@ -196,10 +196,22 @@
     }).then(function (d) {
       if (!d.files || !d.files[0]) return [];
       return fetch(API + '/' + d.files[0].id + '?alt=media&key=' + API_KEY).then(function (r) {
-        if (!r.ok) return [];
-        return r.json().catch(function () { return []; });
+        if (!r.ok) throw new Error('store_manifest.json download failed (HTTP ' + r.status + ')');
+        return r.json().then(function (j) {
+          if (!Array.isArray(j)) throw new Error('store_manifest.json must contain a [...] array');
+          return j;
+        }).catch(function (e) {
+          throw new Error('store_manifest.json invalid: ' + (e.message || 'bad JSON'));
+        });
       });
-    }).catch(function () { return []; });
+    });
+  }
+
+  function fetchManifestSafe(folderId) {
+    return fetchManifest(folderId).catch(function (e) {
+      toast(e.message);
+      return [];
+    });
   }
 
   function dedupe(list) {
@@ -239,8 +251,8 @@
           if (subId) jobs.push(parseFolder(subId, state.platform));
           jobs.push(otherSubId ? parseFolder(otherSubId, otherPlatform) : Promise.resolve(null));
           jobs.push(webId ? listFolderMaps(webId) : Promise.resolve(null));
-          jobs.push(fetchManifest(ROOT_FOLDER));
-          jobs.push(webId ? fetchManifest(webId) : Promise.resolve([]));
+          jobs.push(fetchManifestSafe(ROOT_FOLDER));
+          jobs.push(webId ? fetchManifestSafe(webId) : Promise.resolve([]));
           return Promise.all(jobs);
         });
       });
