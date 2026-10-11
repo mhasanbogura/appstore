@@ -433,12 +433,21 @@
     });
   }
 
-  function show(view) {
+  var currentView = 'home';
+  function show(view, push) {
+    currentView = view;
     $('view-home').hidden = view !== 'home';
     $('view-settings').hidden = view !== 'settings';
     $('btnSettings').style.opacity = view === 'settings' ? '0.45' : '1';
     window.scrollTo(0, 0);
+    if (push !== false) {
+      var h = view === 'settings' ? '#/settings' : '#/';
+      if (location.hash !== h) location.hash = h;
+    }
   }
+  window.addEventListener('hashchange', function () {
+    show(location.hash === '#/settings' ? 'settings' : 'home', false);
+  });
 
   // ---------- events ----------
   document.querySelectorAll('.chip').forEach(function (c) {
@@ -476,7 +485,7 @@
   });
 
   $('btnSettings').addEventListener('click', function () {
-    show($('view-settings').hidden ? 'settings' : 'home');
+    show(currentView === 'settings' ? 'home' : 'settings');
   });
   $('btnBrand').addEventListener('click', function () { show('home'); });
 
@@ -486,7 +495,6 @@
 
   $('rowAbout').addEventListener('click', openAbout);
   $('rowContact').addEventListener('click', openContact);
-  $('btnBack').addEventListener('click', function () { show('home'); });
 
   // ---------- init (no login), default Light ----------
   var savedTheme = 'light';
@@ -495,5 +503,6 @@
     savedTheme = (st === 'dark') ? 'dark' : 'light';
   } catch (e) {}
   setTheme(savedTheme);
+  show(location.hash === '#/settings' ? 'settings' : 'home', false);
   loadApps();
 })();
