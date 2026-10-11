@@ -158,8 +158,20 @@
     return k.trim();
   }
 
+  function parseManifestSize(v) {
+    if (v == null) return 0;
+    if (typeof v === 'number') return Math.floor(v);
+    var m = String(v).trim().match(/^([\d.]+)\s*([KMGT]?B)?$/i);
+    if (!m) return 0;
+    var mult = { GB: 1073741824, MB: 1048576, KB: 1024 }[(m[2] || '').toUpperCase()] || 1;
+    return Math.floor(parseFloat(m[1]) * mult);
+  }
+
   function parseManifestEntry(o, iconMap, mdMap) {
-    if (!o || !o.packageName || !o.name) return null;
+    if (!o) return null;
+    var pkg = String(o.packageName || '').trim() ||
+      ('com.manifest.' + String(o.name || 'app').toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'com.manifest.app');
+    var name = String(o.name || '').trim() || pkg;
     var icon = o.iconUrl || '';
     if (!icon && o.iconFileName) {
       var fileId = iconMap[siblingKey(o.iconFileName)];
@@ -167,10 +179,10 @@
     }
     var mdId = o.mdFileName ? (mdMap[siblingKey(o.mdFileName)] || null) : null;
     return {
-      id: 'manifest_' + o.packageName,
-      packageName: o.packageName, name: o.name,
-      versionName: o.versionName || '1.0', versionCode: o.versionCode || 1,
-      size: o.size || 0, fileName: o.fileName || '', mdId: mdId,
+      id: 'manifest_' + pkg,
+      packageName: pkg, name: name,
+      versionName: String(o.versionName || '').trim() || '1.0', versionCode: o.versionCode || 1,
+      size: parseManifestSize(o.size), fileName: o.fileName || '', mdId: mdId,
       iconUrl: icon, downloadUrl: o.downloadUrl || '',
       inlineDesc: mdId ? '' : (o.description || ''),
       platform: o.platform || 'Android'
