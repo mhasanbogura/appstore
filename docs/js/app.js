@@ -169,6 +169,9 @@
       var all = dedupe(parts[0].concat(parts[1] || []));
       all.sort(function (a, b) { return a.name.localeCompare(b.name); });
       state.apps = all;
+      state.storeApp = all.find(function (a) { return a.packageName === 'com.mahmuduls.appstore'; }) || null;
+      var vf = $('versionFooter');
+      if (vf) vf.textContent = state.storeApp ? 'Version ' + state.storeApp.versionName : '';
       render();
     }).catch(function (e) {
       stats.textContent = 'Failed to load apps. Check connection and retry.';
@@ -206,20 +209,115 @@
     });
   }
 
+  function inlineMd(s) {
+    // escape, unescape md, bold, links (mirrors the Android app dialog)
+    s = s.replace(/\\_/g, '_');
+    s = esc(s);
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(https?:\/\/[\w\d\-._~:/?#\[\]@!$&'()*+,;=%]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    return s;
+  }
+
+  function renderMd(text) {
+    var html = '', para = [];
+    function flushPara() {
+      if (para.length) { html += '<p>' + para.join('<br>') + '</p>'; para = []; }
+    }
+    text.split('\n').forEach(function (rawLine) {
+      var raw = rawLine.replace(/^\s+/, '');
+      if (!raw.trim()) return;
+      var h = raw.indexOf('### ') === 0 ? 3 : raw.indexOf('## ') === 0 ? 2 : raw.indexOf('# ') === 0 ? 1 : 0;
+      var isNum = /^\d+\.\s/.test(raw);
+      var isBul = raw.indexOf('* ') === 0 || raw.indexOf('- ') === 0;
+      if (h > 0) {
+        flushPara();
+        html += '<div class="md-h' + h + '">' + inlineMd(raw.replace(/^#{1,3}\s+/, '')) + '</div>';
+      } else if (isBul || isNum) {
+        flushPara();
+        var body = isNum ? raw.replace(/^\d+\.\s/, '') : raw.slice(2);
+        var prefix = isNum ? raw.match(/^\d+/)[0] + '. ' : '• ';
+        html += '<div class="md-li">' + esc(prefix) + inlineMd(body) + '</div>';
+      } else {
+        para.push(inlineMd(raw.trim()));
+      }
+    });
+    flushPara();
+    return html || '<p>No description.</p>';
+  }
+
+  function sectionAfter(text, keyword) {
+    var lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      if (t.indexOf('## ') === 0 && t.toLowerCase().indexOf(keyword) !== -1) {
+        return lines.slice(i + 1).join('\n').trim();
+      }
+    }
+    return '';
+  }
+
+  function firstUrl(text) {
+    var m = text.match(/https?:\/\/[\w\d\-._~:/?#\[\]@!$&'()*+,;=%]+/);
+    return m ? m[0] : null;
+  }
+
+  function overviewOf(text) {
+    var lines = text.split('\n'), out = [], started = false;
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      if (!started) {
+        if (t.toLowerCase() === '## overview') started = true;
+        continue;
+      }
+      if (t.indexOf('## ') === 0) break;
+      if (t) out.push(t);
+    }
+    return out.join(' ').replace(/\*\*/g, '').replace(/(^|\s)[*-] /g, ' ').trim();
+  }
+
   function openModal(app) {
     $('mIcon').src = app.iconUrl || 'icons/icon.png';
+    $('mDownload').style.display = '';
+    $('mDownload').textContent = 'Download';
+    $('mDownload').href = app.downloadUrl;
     $('mName').textContent = app.name;
     $('mPkg').textContent = app.packageName;
     $('mVer').textContent = 'v' + app.versionName + (app.size ? ' • ' + fmtSize(app.size) : '');
-    $('mDownload').href = app.downloadUrl;
-    $('mDesc').textContent = 'Loading description...';
+    $('mDesc').innerHTML = 'Loading description...';
+    $('mActions').innerHTML = '';
     $('modal').hidden = false;
     document.body.style.overflow = 'hidden';
+    function finishDesc(text) {
+      var clean = (text || '').trim();
+      $('mDesc').innerHTML = clean ? renderMd(clean) : '<p>No description.</p>';
+      // Copy Settings / Open Link / Share App buttons, same as the app dialog
+      var btns = '';
+      var settings = sectionAfter(clean, 'settings');
+      if (settings) btns += '<button class="btn-outline" data-act="copy">Copy Settings</button>';
+      var linkUrl = firstUrl(sectionAfter(clean, 'link'));
+      if (linkUrl) btns += '<a class="btn-outline" href="' + esc(linkUrl) + '" target="_blank" rel="noopener">Open Link</a>';
+      btns += '<button class="btn-outline" data-act="share">Share App</button>';
+      $('mActions').innerHTML = btns;
+      $('mActions').querySelectorAll('button').forEach(function (b) {
+        b.addEventListener('click', function () {
+          if (b.getAttribute('data-act') === 'copy') {
+            var t = settings.replace(/\\_/g, '_');
+            if (navigator.clipboard) navigator.clipboard.writeText(t).then(function () { toast('Settings copied'); });
+          } else {
+            var ov = overviewOf(clean).slice(0, 200);
+            var st = 'Check out ' + app.name + ' — ' + ov + '\n\nDownload: ' + app.downloadUrl;
+            if (navigator.share) navigator.share({ title: app.name, text: st }).catch(function () {});
+            else if (navigator.clipboard) navigator.clipboard.writeText(st).then(function () { toast('Share text copied'); });
+          }
+        });
+      });
+      $('mActions')._app = app;
+      $('mActions')._settings = settings;
+    }
     if (app.mdId) {
-      fetchMd(app.mdId).then(function (t) { $('mDesc').textContent = t.trim() || 'No description.'; })
-        .catch(function () { $('mDesc').textContent = 'No description.'; });
+      fetchMd(app.mdId).then(finishDesc).catch(function () { finishDesc(''); });
     } else {
-      $('mDesc').textContent = 'Discovered APK from Google Drive: ' + app.fileName + '.';
+      finishDesc('Discovered APK from Google Drive: ' + app.fileName + '.');
     }
   }
 
@@ -228,6 +326,105 @@
     document.body.style.overflow = '';
   }
 
+  function findFileByName(folderId, name) {
+    return driveGet({
+      q: "'" + folderId + "' in parents and name = '" + name + "' and trashed = false",
+      key: API_KEY,
+      fields: 'files(id,name)'
+    }).then(function (d) {
+      return (d.files && d.files[0]) || null;
+    });
+  }
+
+  function findFileByPrefix(folderId, prefix, suffix) {
+    return listAll("'" + folderId + "' in parents and trashed = false").then(function (files) {
+      return files.find(function (f) {
+        return f.name.indexOf(prefix) === 0 && (!suffix || f.name.toLowerCase().endsWith(suffix));
+      }) || null;
+    });
+  }
+
+  function parseContactMd(text) {
+    var entries = [];
+    text.split('\n').forEach(function (raw) {
+      var line = raw.trim().replace(/^[-*]\s+/, '');
+      var i = line.indexOf(':');
+      if (i > 0) {
+        var label = line.slice(0, i).trim(), value = line.slice(i + 1).trim();
+        if (label && value) entries.push({ label: label, value: value });
+      }
+    });
+    return entries;
+  }
+
+  function linkifyContact(value) {
+    var v = value;
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return '<a href="mailto:' + esc(v) + '">' + esc(v) + '</a>';
+    if (/^https?:\/\//i.test(v)) return '<a href="' + esc(v) + '" target="_blank" rel="noopener">' + esc(v) + '</a>';
+    if (/^\+?[0-9][0-9\s\-()]{5,}$/.test(v)) {
+      var num = v.replace(/[^0-9+]/g, '');
+      return '<a href="https://wa.me/' + esc(num) + '" target="_blank" rel="noopener">' + esc(v) + '</a>';
+    }
+    return esc(v);
+  }
+
+  function openAbout() {
+    $('mIcon').src = 'icons/icon.png';
+    $('mDownload').style.display = '';
+    $('mDownload').textContent = 'Get Android App';
+    $('mDownload').href = 'https://github.com/mhasanbogura/appstore/releases';
+    var s = state.storeApp;
+    $('mName').textContent = 'App Store';
+    $('mPkg').textContent = 'com.mahmuduls.appstore';
+    $('mVer').textContent = s ? 'v' + s.versionName : '';
+    $('mDesc').textContent = 'Loading description...';
+    $('modal').hidden = false;
+    document.body.style.overflow = 'hidden';
+    findFileByPrefix(ROOT_FOLDER, 'App Store_', '.md').then(function (f) {
+      if (!f) throw new Error('no md');
+      return fetchMd(f.id);
+    }).then(function (t) { $('mDesc').textContent = (t || '').trim() || 'No description.'; })
+      .catch(function () { $('mDesc').textContent = 'A modern app store that syncs apps from Google Drive.'; });
+  }
+
+  function openContact() {
+    $('mIcon').src = 'icons/icon.png';
+    $('mDownload').style.display = 'none';
+    $('mName').textContent = 'Contact Developer';
+    $('mPkg').textContent = '';
+    $('mVer').textContent = '';
+    $('mDesc').innerHTML = 'Loading...';
+    $('modal').hidden = false;
+    document.body.style.overflow = 'hidden';
+    findFileByName(ROOT_FOLDER, 'Contact.md').then(function (f) {
+      if (!f) throw new Error('no contact');
+      return fetchMd(f.id);
+    }).then(function (t) {
+      var entries = parseContactMd(t || '');
+      var nameE = entries.find(function (e) { return e.label.toLowerCase() === 'name'; });
+      var descE = entries.find(function (e) { return e.label.toLowerCase() === 'description'; });
+      if (nameE) $('mName').textContent = nameE.value;
+      var html = '';
+      if (descE) html += '<p class="contact-desc">' + esc(descE.value) + '</p>';
+      html += '<div class="contact-list">' + entries.filter(function (e) {
+        return e.label.toLowerCase() !== 'name' && e.label.toLowerCase() !== 'description';
+      }).map(function (e) {
+        return '<div><div class="dim" style="font-size:12px">' + esc(e.label) + '</div><div>' + linkifyContact(e.value) + '</div></div>';
+      }).join('') + '</div>';
+      $('mDesc').innerHTML = html || 'No contact info.';
+    }).catch(function () { $('mDesc').textContent = 'Contact info not available.'; });
+  }
+
+  function shareApp() {
+    var text = 'Check out App Store — A modern app store that syncs apps from Google Drive. Browse, download, install, and manage app updates, all in one convenient place.\n\nDownload: https://u2l.ai/AppStore';
+    if (navigator.share) {
+      navigator.share({ title: 'App Store', text: text }).catch(function () {});
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { toast('Share text copied'); }, function () { toast('Copy failed'); });
+    } else {
+      toast('Sharing not supported');
+    }
+  }
   function setTheme(t) {
     document.documentElement.setAttribute('data-theme', t);
     try { localStorage.setItem('appstore-theme', t); } catch (e) {}
@@ -286,6 +483,10 @@
   document.querySelectorAll('#themeRow .theme-btn').forEach(function (b) {
     b.addEventListener('click', function () { setTheme(b.getAttribute('data-theme')); });
   });
+
+  $('rowShare').addEventListener('click', shareApp);
+  $('rowAbout').addEventListener('click', openAbout);
+  $('rowContact').addEventListener('click', openContact);
 
   // ---------- init (no login) ----------
   var savedTheme = 'light';
