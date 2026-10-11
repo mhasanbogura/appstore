@@ -198,6 +198,20 @@
     return Object.keys(byPkg).map(function (k) { return byPkg[k]; });
   }
 
+  function listFolderMaps(folderId) {
+    return listAll("'" + folderId + "' in parents and trashed = false").then(function (files) {
+      var icons = {}, mds = {};
+      files.forEach(function (f) {
+        if ((f.mimeType || '').indexOf('image/') === 0) {
+          icons[f.name.replace(/\.(png|PNG|jpg|jpeg|webp)$/, '').trim()] = f.id;
+        } else if (/\.md$/i.test(f.name)) {
+          mds[f.name.replace(/\.md$/i, '').trim()] = f.id;
+        }
+      });
+      return { icons: icons, mds: mds };
+    }).catch(function () { return { icons: {}, mds: {} }; });
+  }
+
   function loadApps() {
     var stats = $('statsLine'), list = $('appList'), empty = $('emptyState');
     stats.textContent = 'Loading apps...';
@@ -208,22 +222,30 @@
     var otherPlatform = state.platform === 'Android' ? 'Windows' : 'Android';
     findSubfolder(ROOT_FOLDER, state.platform).then(function (subId) {
       return findSubfolder(ROOT_FOLDER, otherPlatform).then(function (otherSubId) {
-        var jobs = [parseFolder(ROOT_FOLDER, state.platform)];
-        if (subId) jobs.push(parseFolder(subId, state.platform));
-        jobs.push(otherSubId ? parseFolder(otherSubId, otherPlatform) : Promise.resolve(null));
-        jobs.push(fetchManifest(ROOT_FOLDER));
-        return Promise.all(jobs);
+        return findSubfolder(ROOT_FOLDER, 'Web').then(function (webId) {
+          var jobs = [parseFolder(ROOT_FOLDER, state.platform)];
+          if (subId) jobs.push(parseFolder(subId, state.platform));
+          jobs.push(otherSubId ? parseFolder(otherSubId, otherPlatform) : Promise.resolve(null));
+          jobs.push(webId ? listFolderMaps(webId) : Promise.resolve(null));
+          jobs.push(fetchManifest(ROOT_FOLDER));
+          jobs.push(webId ? fetchManifest(webId) : Promise.resolve([]));
+          return Promise.all(jobs);
+        });
       });
     }).then(function (parts) {
-      var manifest = parts[parts.length - 1] || [];
-      var appFolders = parts.slice(0, parts.length - 2);
-      var otherMaps = parts[parts.length - 2];
+      var rootManifest = parts[parts.length - 2] || [];
+      var webManifest = parts[parts.length - 1] || [];
+      var manifest = rootManifest.concat(webManifest);
+      var appFolders = parts.slice(0, parts.length - 4);
+      var otherMaps = parts[parts.length - 4];
+      var webMaps = parts[parts.length - 3];
       var iconMap = {}, mdMap = {}, all = [];
       function mergeMaps(f) {
         if (!f) return;
         Object.keys(f.icons).forEach(function (k) { if (!iconMap[k]) iconMap[k] = f.icons[k]; });
         Object.keys(f.mds).forEach(function (k) { if (!mdMap[k]) mdMap[k] = f.mds[k]; });
       }
+      mergeMaps(webMaps);
       appFolders.forEach(function (f) { if (f) all = all.concat(f.apps); mergeMaps(f); });
       mergeMaps(otherMaps);
       manifest.forEach(function (m) {
