@@ -78,7 +78,8 @@
   }
 
   function parseFile(f, apiKey, iconMap, mdMap, platform) {
-    var stripped = stripExt(f.name, ['.apk', '.zip']);
+    var stripped = stripExt(f.name, ['.apk', '.APK', '.zip', '.ZIP']);
+    var isWin = platform === 'Windows';
     var verName = '1.0', verCode = 1;
 
     // First _v match after the package name (mirrors the Android app)
@@ -86,6 +87,13 @@
     while ((m = re.exec(stripped)) !== null) {
       if (stripped.slice(0, m.index).indexOf('.') !== -1) { vm = m[1]; break; }
     }
+    // Windows ZIPs have no package prefix: accept a plain _vN.N segment
+    var wvm = null;
+    if (isWin && !vm) {
+      var wm = stripped.match(/_v(\d[\d.]*)/);
+      if (wm) wvm = wm[1];
+    }
+    if (wvm) vm = wvm;
     if (vm) {
       verName = vm;
       var code = parseInt(vm.replace(/\./g, ''), 10);
@@ -94,7 +102,9 @@
     var bm = stripped.match(/_(?:build|buid)_(\d+)/i);
     if (bm) verCode = parseInt(bm[1], 10) || verCode;
 
-    var before = vm ? stripped.slice(0, stripped.indexOf('_v' + vm)).replace(/_+$/, '') : stripped;
+    var before;
+    if (wvm) before = stripped.slice(0, stripped.indexOf('_v' + wvm)).replace(/_+$/, '');
+    else before = vm ? stripped.slice(0, stripped.indexOf('_v' + vm)).replace(/_+$/, '') : stripped;
     var key = before;
     if (!(mdMap[key] || iconMap[key])) {
       var cand = Object.keys(mdMap).concat(Object.keys(iconMap)).find(function (k) {
