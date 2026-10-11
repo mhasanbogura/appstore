@@ -30,6 +30,9 @@
 </header>
 
 <main id="view-home" class="view">
+  <div id="pullHint" class="pull-hint" hidden>
+    <span class="pull-dot"></span><span id="pullText">Refreshing...</span>
+  </div>
   <div class="toolbar">
     <div class="search-row">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" class="search-icon"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1114 9.5 4.5 4.5 0 019.5 14z"/></svg>
@@ -40,9 +43,6 @@
       <button class="chip" data-platform="Windows">Windows</button>
     </div>
     <div id="statsLine" class="stats-line">Loading apps...</div>
-  </div>
-  <div id="pullHint" class="pull-hint" hidden>
-    <span class="pull-dot"></span><span id="pullText">Refreshing...</span>
   </div>
   <div id="appList" class="app-list"></div>
   <div id="emptyState" class="empty-state" hidden>No apps found.</div>
@@ -98,7 +98,7 @@
     </div>
     <div id="mDesc" class="modal-desc">Loading description...</div>
     <div id="mActions" class="modal-actions"></div>
-    <a id="mDownload" class="btn-primary" href="#" target="_blank" rel="noopener">Download</a>
+    <a id="mDownload" class="btn-primary" href="#">Download</a>
   </div>
 </div>
 

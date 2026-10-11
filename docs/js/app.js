@@ -310,7 +310,7 @@
         '<div class="app-info"><div class="app-name">' + esc(a.name) + '</div>' +
         '<div class="app-pkg">' + esc(a.packageName) + '</div>' +
         '<div class="app-ver">v' + esc(a.versionName) + (a.size ? ' • ' + esc(fmtSize(a.size)) : '') + '</div></div>' +
-        '<a class="btn-download" href="' + esc(a.downloadUrl) + '" target="_blank" rel="noopener" data-dl="' + i + '">Download</a>' +
+        '<a class="btn-download" href="' + esc(a.downloadUrl) + '" data-dl="' + i + '">Download</a>' +
         '</div>';
     }).join('');
     // stash filtered list for modal lookup
