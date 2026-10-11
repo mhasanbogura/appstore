@@ -428,6 +428,8 @@
   function setTheme(t) {
     document.documentElement.setAttribute('data-theme', t);
     try { localStorage.setItem('appstore-theme', t); } catch (e) {}
+    var dt = $('darkToggle');
+    if (dt) dt.checked = (t === 'dark');
     document.querySelectorAll('#themeRow .theme-btn').forEach(function (b) {
       b.classList.toggle('active', b.getAttribute('data-theme') === t);
     });
@@ -489,9 +491,12 @@
   });
   $('btnBrand').addEventListener('click', function () { show('home'); });
 
-  document.querySelectorAll('#themeRow .theme-btn').forEach(function (b) {
-    b.addEventListener('click', function () { setTheme(b.getAttribute('data-theme')); });
-  });
+  var darkToggle = $('darkToggle');
+  if (darkToggle) {
+    darkToggle.addEventListener('change', function () {
+      setTheme(darkToggle.checked ? 'dark' : 'light');
+    });
+  }
 
   $('rowAbout').addEventListener('click', openAbout);
   $('rowContact').addEventListener('click', openContact);
