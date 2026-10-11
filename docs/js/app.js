@@ -185,7 +185,7 @@
       size: parseManifestSize(o.size), fileName: o.fileName || '', mdId: mdId,
       iconUrl: icon, downloadUrl: o.downloadUrl || '',
       inlineDesc: mdId ? '' : (o.description || ''),
-      platform: o.platform || 'Android'
+      platform: 'Windows'
     };
   }
 
