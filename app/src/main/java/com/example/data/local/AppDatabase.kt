@@ -5,9 +5,10 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [AppItem::class], version = 5, exportSchema = false)
+@Database(entities = [AppItem::class, UpdateHistory::class], version = 8, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract val appDao: AppDao
+    abstract val updateHistoryDao: UpdateHistoryDao
 
     companion object {
         @Volatile

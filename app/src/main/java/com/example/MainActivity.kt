@@ -18,6 +18,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -33,6 +34,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -45,11 +47,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -85,9 +90,15 @@ import com.example.data.local.AppItem
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.DownloadState
 import com.example.ui.viewmodel.StoreViewModel
+import com.example.ui.viewmodel.AuthViewModel
+import android.app.Activity
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 
 class MainActivity : ComponentActivity() {
     private val viewModel: StoreViewModel by viewModels()
+    private val authViewModel: AuthViewModel by viewModels()
     private var pendingTab by mutableStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,6 +110,11 @@ class MainActivity : ComponentActivity() {
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useDeviceTheme by viewModel.useDeviceTheme.collectAsState()
     val effectiveDarkMode = if (useDeviceTheme) isSystemInDarkTheme() else isDarkMode
+    val currentUser by authViewModel.currentUser.collectAsState()
+    val authError by authViewModel.authError.collectAsState()
+
+    var authScreen by remember { mutableStateOf("welcome") }
+
     MyApplicationTheme(darkTheme = effectiveDarkMode) {
         LaunchedEffect(effectiveDarkMode) {
             val window = (this@MainActivity).window
@@ -121,7 +137,40 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        AppStoreApp(viewModel = viewModel, selectedTab = pendingTab, onTabSelected = { pendingTab = it })
+
+        if (currentUser == null) {
+            when (authScreen) {
+                "welcome" -> com.example.ui.auth.AuthWelcomeScreen(
+                    onLoginClick = { authScreen = "login" },
+                    onGoogleLoginClick = { idToken -> authViewModel.googleLogin(idToken) },
+                    onRegisterClick = { authScreen = "register" },
+                    onBack = { finish() }
+                )
+                "login" -> com.example.ui.auth.AuthLoginScreen(
+                    onLoginSuccess = { email, pass -> authViewModel.emailLogin(email, pass) },
+                    onGoogleLoginClick = { idToken -> authViewModel.googleLogin(idToken) },
+                    onForgotPassword = { authScreen = "forgot" },
+                    onRegisterClick = { authScreen = "register" },
+                    onBack = { authScreen = "welcome" },
+                    authError = authError
+                )
+                "register" -> com.example.ui.auth.AuthRegisterScreen(
+                    onRegisterSuccess = { name, email, pass -> authViewModel.emailRegister(name, email, pass) },
+                    onGoogleLoginClick = { idToken -> authViewModel.googleLogin(idToken) },
+                    onLoginClick = { authScreen = "login" },
+                    onBack = { authScreen = "welcome" },
+                    authError = authError
+                )
+                "forgot" -> com.example.ui.auth.AuthForgotPasswordScreen(
+                    onSendReset = { email -> authViewModel.sendResetEmail(email) },
+                    onBackToLogin = { authScreen = "login" },
+                    onBack = { authScreen = "login" },
+                    authError = authError
+                )
+            }
+        } else {
+            AppStoreApp(viewModel = viewModel, authViewModel = authViewModel, selectedTab = pendingTab, onTabSelected = { pendingTab = it }, darkMode = effectiveDarkMode)
+        }
     }
 }
 }
@@ -140,7 +189,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun AppStoreApp(viewModel: StoreViewModel, selectedTab: Int = 0, onTabSelected: (Int) -> Unit = {}) {
+fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selectedTab: Int = 0, onTabSelected: (Int) -> Unit = {}, darkMode: Boolean = true) {
     val context = LocalContext.current
     val allApps by viewModel.allApps.collectAsState()
     val favoriteApps by viewModel.favoriteApps.collectAsState()
@@ -263,43 +312,53 @@ fun AppStoreApp(viewModel: StoreViewModel, selectedTab: Int = 0, onTabSelected: 
 
     Scaffold(
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
-                modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+            val navSelectedColor = if (darkMode) Color.White else Color.Black
+            val navUnselectedColor = if (darkMode) Color(0xFFBDBDBD) else Color(0xFF616161)
+            Row(
+                modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 8.dp)
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                NavigationBarItem(
-                    selected = selectedTab == 0 || selectedTab == 1,
-                    onClick = { onTabSelected(0) },
-                    icon = { Icon(Icons.Filled.Home, contentDescription = "Store") },
-                    label = { Text("Home") }
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { onTabSelected(0) }.padding(vertical = 2.dp)
+                ) {
+                    Icon(Icons.Filled.Home, contentDescription = "Store", tint = if (selectedTab == 0 || selectedTab == 1) navSelectedColor else navUnselectedColor, modifier = Modifier.size(22.dp))
+                    Text("Home", fontSize = 11.sp, maxLines = 1, textAlign = TextAlign.Center, color = if (selectedTab == 0 || selectedTab == 1) navSelectedColor else navUnselectedColor)
+                }
 
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { onTabSelected(2) },
-                    icon = {
-                        BadgedBox(badge = {
-                            if (appsWithUpdates.isNotEmpty()) {
-                                Badge { Text(appsWithUpdates.size.toString()) }
-                            }
-                        }) {
-                            Icon(Icons.Default.SystemUpdateAlt, contentDescription = "Updates")
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { onTabSelected(2) }.padding(vertical = 2.dp)
+                ) {
+                    BadgedBox(badge = {
+                        if (appsWithUpdates.isNotEmpty()) {
+                            Badge { Text(appsWithUpdates.size.toString()) }
                         }
-                    },
-                    label = { Text("Manage apps") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 3,
-                    onClick = { onTabSelected(3) },
-                    icon = { Icon(Icons.Default.Download, contentDescription = "Downloaded") },
-                    label = { Text("Downloaded") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 4,
-                    onClick = { onTabSelected(4) },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                    label = { Text("Settings") }
-                )
+                    }) {
+                        Icon(Icons.Default.SystemUpdateAlt, contentDescription = "Updates", tint = if (selectedTab == 2) navSelectedColor else navUnselectedColor, modifier = Modifier.size(22.dp))
+                    }
+                    Text("Manage Apps", fontSize = 11.sp, maxLines = 1, textAlign = TextAlign.Center, color = if (selectedTab == 2) navSelectedColor else navUnselectedColor)
+                }
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { onTabSelected(3) }.padding(vertical = 2.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = "Downloads", tint = if (selectedTab == 3) navSelectedColor else navUnselectedColor, modifier = Modifier.size(22.dp))
+                    Text("Downloads", fontSize = 11.sp, maxLines = 1, textAlign = TextAlign.Center, color = if (selectedTab == 3) navSelectedColor else navUnselectedColor)
+                }
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { onTabSelected(4) }.padding(vertical = 2.dp)
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = if (selectedTab == 4) navSelectedColor else navUnselectedColor, modifier = Modifier.size(22.dp))
+                    Text("Settings", fontSize = 11.sp, maxLines = 1, textAlign = TextAlign.Center, color = if (selectedTab == 4) navSelectedColor else navUnselectedColor)
+                }
             }
         },
         contentWindowInsets = WindowInsets.safeDrawing
@@ -424,9 +483,9 @@ fun AppStoreApp(viewModel: StoreViewModel, selectedTab: Int = 0, onTabSelected: 
                                  val state = downloadStates[app.packageName]
                                  if (state is DownloadState.Downloaded) {
                                      viewModel.installDownloadedApp(app.packageName)
-                                    viewModel.markPackageUpdated(app.packageName, app.versionCode, app.patchVersion)
-                                    viewModel.deleteDownloadedFile(app.packageName)
-                                } else viewModel.startDownload(app)
+                                     viewModel.markPackageUpdated(app.packageName, app.versionCode, app.patchVersion)
+                                     viewModel.deleteDownloadedFile(app.packageName)
+                                 } else viewModel.startDownload(app)
                             } catch (e: Exception) {
                                 android.util.Log.e("MainActivity", "Update click failed", e)
                                  Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
@@ -472,6 +531,7 @@ fun AppStoreApp(viewModel: StoreViewModel, selectedTab: Int = 0, onTabSelected: 
                       )
                       4 -> SettingsTab(
                         viewModel = viewModel,
+                        authViewModel = authViewModel,
                         onForceSync = { refreshWithSelfUpdateCheck() },
                         isSyncing = isSyncing,
                         onStartSelfUpdate = { viewModel.startSelfUpdate() }
@@ -480,6 +540,73 @@ fun AppStoreApp(viewModel: StoreViewModel, selectedTab: Int = 0, onTabSelected: 
             }
         }
     }
+}
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun RefreshPillBox(
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val state = rememberPullToRefreshState()
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = modifier,
+        state = state,
+        indicator = {
+            val refreshing = isRefreshing
+            val pulled = state.distanceFraction
+            AnimatedVisibility(
+                visible = refreshing || pulled > 0.02f,
+                enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+                modifier = Modifier.align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = 12.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+                    shadowElevation = 4.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val infinite = rememberInfiniteTransition(label = "refreshSpin")
+                        val spin by infinite.animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(animation = tween(1000, easing = LinearEasing)),
+                            label = "spin"
+                        )
+                        val angle = if (refreshing) spin else pulled * 360f
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp).rotate(angle)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (refreshing) "Refreshing..."
+                            else if (pulled >= 1f) "Release to refresh"
+                            else "Pull to refresh",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        },
+        content = content
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -500,7 +627,7 @@ fun StoreTab(
     var showSearch by remember { mutableStateOf(false) }
     val iconBorderColor = if (isSystemInDarkTheme()) Color(0xFFE5E4E2) else Color(0xFF333333)
 
-    PullToRefreshBox(
+    RefreshPillBox(
         isRefreshing = isSyncing,
         onRefresh = onSyncClick,
         modifier = Modifier.fillMaxSize()
@@ -517,21 +644,23 @@ fun StoreTab(
                     Image(
                         painter = painterResource(id = R.drawable.app_store_icon),
                         contentDescription = "Logo",
-                        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).border(0.5.dp, iconBorderColor, RoundedCornerShape(10.dp)),
+                        modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).border(0.5.dp, iconBorderColor, RoundedCornerShape(10.dp)),
                         contentScale = ContentScale.Crop
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
                             text = "App Store",
-                            fontSize = 20.sp,
+                            fontSize = 22.sp,
+                            lineHeight = 26.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Text(
                             text = "Build by Mahmudul",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            fontSize = 10.sp,
+                            lineHeight = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -599,7 +728,7 @@ fun StoreTab(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { showSearch = false }),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).focusRequester(focusRequester),
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -628,10 +757,10 @@ fun StoreTab(
                     }
                 } else {
                     LazyColumn(
-                        contentPadding = PaddingValues(bottom = 16.dp),
+                        contentPadding = PaddingValues(bottom = 0.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        items(if (query.isBlank()) platformFiltered else filtered, key = { it.packageName }) { app ->
+                        items(if (query.isBlank()) platformFiltered else filtered, key = { it.id }) { app ->
                             Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) {
                                 AppCard(
                                     app = app,
@@ -650,7 +779,7 @@ fun StoreTab(
             } else {
                 // Standard Catalog Layout
                 LazyColumn(
-                        contentPadding = PaddingValues(bottom = 16.dp),
+                        contentPadding = PaddingValues(bottom = 0.dp),
                         modifier = Modifier.weight(1f)
                     ) {
                         if (platformFiltered.isEmpty()) {
@@ -685,7 +814,7 @@ fun StoreTab(
                                 }
                             }
                         } else {
-                            items(platformFiltered, key = { it.packageName }) { app ->
+                            items(platformFiltered, key = { it.id }) { app ->
                                 Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) {
                                     AppCard(
                                         app = app,
@@ -737,7 +866,7 @@ fun AppCard(
             },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = MaterialTheme.colorScheme.surface
         ),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
@@ -772,44 +901,36 @@ fun AppCard(
                 Text(
                     text = app.name,
                     fontSize = 15.sp,
+                    lineHeight = 18.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                Spacer(modifier = Modifier.height(4.dp))
                 if (app.platform != "Windows") {
                     Text(
                         text = app.packageName,
                         fontSize = 11.sp,
+                        lineHeight = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val displayVersion = if (installedVersion != null && installedVerName.isNotEmpty()) installedVerName else app.versionName
-                    val versionTint = if (installedVersion != null && installedVerName.isNotEmpty()) {
-                        if (ctx.isUpdateAvailable(app, installedVersion, installedVerName)) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
-                    } else MaterialTheme.colorScheme.primary
+                    val cardHasUpdate = installedVersion != null && installedVerName.isNotEmpty() && ctx.isUpdateAvailable(app, installedVersion, installedVerName)
+                    val versionSizeText = "v$displayVersion • ${formatFileSize(app.size)}"
                     Text(
-                        text = "v$displayVersion",
-                        fontSize = versionFontSize(displayVersion),
-                        fontWeight = FontWeight.SemiBold,
-                        color = versionTint
-                    )
-                    Text(
-                        text = "•",
-                        fontSize = 9.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                    Text(
-                        text = formatFileSize(app.size),
-                        fontSize = 9.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = versionSizeText,
+                        fontSize = versionFontSize("v$displayVersion"),
+                        lineHeight = 13.sp,
+                        color = if (cardHasUpdate) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -824,7 +945,7 @@ fun AppCard(
                     is DownloadState.Idle -> {
                         val isInstalled = installedVersion != null
                         val hasUpdate = installedVersion != null && installedVerName?.let { ctx.isUpdateAvailable(app, installedVersion!!, it) } == true
-                        val isWebUrl = !app.downloadUrl.contains("googleapis.com/drive")
+                        val isWebUrl = !app.downloadUrl.contains("googleapis.com/drive") && !app.driveFileId.startsWith("manifest_")
                         if (isWebUrl && !isInstalled) {
                             Button(
                                 onClick = { onWebDownload(app.downloadUrl) },
@@ -842,7 +963,8 @@ fun AppCard(
                                 onClick = {
                                     val desc = if (app.description.startsWith("__MD_ID:")) "" else app.description
                                     val overview = desc.lines().dropWhile { !it.trim().startsWith("## Overview") }.drop(1).takeWhile { !it.trim().startsWith("## ") }.joinToString(" ").trim().replace("**", "").replace("* ", "").replace("- ", "")
-                                    val shareText = "Check out ${app.name} — ${overview.take(200)}\n\nDownload: https://drive.google.com/uc?export=download&id=${app.driveFileId}"
+                                    val dlLink = if (app.driveFileId.startsWith("manifest_")) app.downloadUrl else "https://drive.google.com/uc?export=download&id=${app.driveFileId}"
+                                    val shareText = "Check out ${app.name} — ${overview.take(200)}\n\nDownload: $dlLink"
                                     val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                                         type = "text/plain"
                                         putExtra(android.content.Intent.EXTRA_TEXT, shareText)
@@ -995,7 +1117,7 @@ fun UpdatesTab(
     onLoadDescription: ((AppItem, (String) -> Unit) -> Unit)? = null
 ) {
     val iconBorderColor = if (isSystemInDarkTheme()) Color(0xFFE5E4E2) else Color(0xFF333333)
-    PullToRefreshBox(
+    RefreshPillBox(
         isRefreshing = isSyncing,
         onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize()
@@ -1003,34 +1125,36 @@ fun UpdatesTab(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp)
+            .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 0.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Bottom
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Manage apps", 
-                    fontSize = 28.sp, 
-                    fontWeight = FontWeight.Medium,
+                    text = "Manage Apps", 
+                    fontSize = 22.sp,
+                    lineHeight = 26.sp,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
                     text = "${appsWithUpdates.size} update${if (appsWithUpdates.size != 1) "s" else ""} available • ${installedStoreApps.size} installed",
-                    fontSize = 13.sp,
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             TextButton(
                 onClick = onCheckUpdates,
-                contentPadding = PaddingValues(horizontal = 12.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp),
                 modifier = Modifier.wrapContentSize()
             ) {
                 Text(
                     text = "Check for updates", 
-                    fontSize = 13.sp, 
+                    fontSize = 12.sp, 
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
@@ -1102,7 +1226,7 @@ fun UpdatesTab(
                         }
                     }
                 }
-                items(appsWithUpdates, key = { "update_${it.packageName}" }) { app ->
+                items(appsWithUpdates, key = { "update_${it.id}" }) { app ->
                     val state = downloadStates[app.packageName]
                     val installedVer = installedPackages[app.packageName] ?: 0
                     val ctx = LocalContext.current
@@ -1119,11 +1243,11 @@ fun UpdatesTab(
                                             ),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            containerColor = MaterialTheme.colorScheme.surface
                         ),
                         border = androidx.compose.foundation.BorderStroke(
-                            1.dp, 
-                            MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                            1.dp,
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
                         )
                     ) {
                         Row(
@@ -1150,14 +1274,28 @@ fun UpdatesTab(
                                 Text(
                                     text = app.name,
                                     fontSize = 15.sp,
+                                    lineHeight = 18.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                if (app.platform != "Windows") {
+                                    Text(
+                                        text = app.packageName,
+                                        fontSize = 11.sp,
+                                        lineHeight = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                }
                                 Text(
-                                    text = "v${installedVerName} → v${app.versionName}",
+                                    text = "v${installedVerName} → v${app.versionName} • ${formatFileSize(app.size)}",
                                     fontSize = versionFontSize("v${installedVerName} → v${app.versionName}"),
+                                    lineHeight = 13.sp,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
@@ -1235,14 +1373,14 @@ fun UpdatesTab(
                 item {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Installed apps",
+                        text = "Installed Apps",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
-                items(installedStoreApps, key = { "installed_${it.packageName}" }) { app ->
+                items(installedStoreApps, key = { "installed_${it.id}" }) { app ->
                     val installedVer = installedPackages[app.packageName] ?: 0
                     val ctx = LocalContext.current
                     val installedVerName = try {
@@ -1259,7 +1397,7 @@ fun UpdatesTab(
                                             ),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            containerColor = MaterialTheme.colorScheme.surface
                         ),
                         border = androidx.compose.foundation.BorderStroke(
                             1.dp, 
@@ -1290,14 +1428,28 @@ fun UpdatesTab(
                                 Text(
                                     text = app.name,
                                     fontSize = 14.sp,
+                                    lineHeight = 17.sp,
                                     fontWeight = FontWeight.Medium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                if (app.platform != "Windows") {
+                                    Text(
+                                        text = app.packageName,
+                                        fontSize = 11.sp,
+                                        lineHeight = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                }
                                 Text(
-                                    text = if (hasUpdate) "v${installedVerName} → v${app.versionName}" else "v${app.versionName}",
-                                    fontSize = versionFontSize(if (hasUpdate) "v${installedVerName} → v${app.versionName}" else "v${app.versionName}"),
+                                    text = if (hasUpdate) "v${installedVerName} → v${app.versionName} • ${formatFileSize(app.size)}" else "v${app.versionName} • ${formatFileSize(app.size)}",
+                                    fontSize = versionFontSizeNarrow(if (hasUpdate) "v${installedVerName} → v${app.versionName} • ${formatFileSize(app.size)}" else "v${app.versionName} • ${formatFileSize(app.size)}"),
+                                    lineHeight = 13.sp,
                                     color = if (hasUpdate) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -1316,16 +1468,17 @@ fun UpdatesTab(
                             Spacer(modifier = Modifier.width(4.dp))
                             Button(
                                 onClick = {
-                                    try {
+                                    if (hasUpdate) onUpdateClick(app)
+                                    else try {
                                         val intent = ctx.packageManager.getLaunchIntentForPackage(app.packageName)
                                         if (intent != null) ctx.startActivity(intent)
                                     } catch (_: Exception) { }
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                colors = ButtonDefaults.buttonColors(containerColor = if (hasUpdate) Color(0xFFFF7F7F) else MaterialTheme.colorScheme.primary),
                                 modifier = Modifier.height(40.dp).widthIn(min = 75.dp),
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp),
                                 shape = RoundedCornerShape(14.dp)
-                            ) { Text("Open", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                            ) { Text(if (hasUpdate) "Update" else "Open", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                         }
                     }
                     AppDescriptionDialog(
@@ -1387,17 +1540,22 @@ fun DownloadsTab(
                         val ext = if (isApk) ".apk" else ".tmp"
                         val nameNoExt = file.name.removeSuffix(ext)
                         val parts = nameNoExt.split("_")
-                        if (parts.size >= 2) {
-                            val pkg = parts.dropLast(1).joinToString("_")
-                            val verCode = parts.last().toIntOrNull() ?: 0
-                            val storeApp = storeApps.find { it.packageName == pkg }
-                            var apkName = storeApp?.name
+                        // Match by original Drive filename first, fall back to legacy pkg_verCode parsing
+                        val storeByFile = storeApps.find { it.fileName.isNotBlank() && (it.fileName == file.name || it.fileName == nameNoExt) }
+                        if (parts.size >= 2 || storeByFile != null) {
+                            val pkg = storeByFile?.packageName ?: parts.dropLast(1).joinToString("_")
+                            val verCode = parts.last().toIntOrNull() ?: storeByFile?.versionCode ?: 0
+                            val storeApp = storeByFile ?: storeApps.find { it.packageName == pkg }
+                            var apkName = storeApp?.name?.takeIf { it.isNotBlank() }
                             var apkIcon = storeApp?.iconUrl
-                            if (storeApp == null && isApk) {
+                            if (apkName.isNullOrBlank() && isApk) {
                                 try {
-                                    val pkgInfo = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
-                                    if (pkgInfo != null) {
-                                        apkName = pkgInfo.applicationInfo?.loadLabel(context.packageManager)?.toString()
+                                    val pkgInfo = context.packageManager.getPackageArchiveInfo(file.absolutePath, android.content.pm.PackageManager.GET_ACTIVITIES)
+                                    val appInfo = pkgInfo?.applicationInfo
+                                    if (appInfo != null) {
+                                        appInfo.sourceDir = file.absolutePath
+                                        appInfo.publicSourceDir = file.absolutePath
+                                        apkName = appInfo.loadLabel(context.packageManager)?.toString()?.takeIf { it.isNotBlank() }
                                     }
                                 } catch (_: Exception) { }
                             }
@@ -1437,7 +1595,7 @@ fun DownloadsTab(
         files.distinctBy { it.packageName }.filter { it.packageName != "com.mahmuduls.appstore" }.sortedBy { it.name.lowercase() }
     }
 
-    PullToRefreshBox(
+    RefreshPillBox(
         isRefreshing = isSyncing,
         onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize()
@@ -1445,7 +1603,7 @@ fun DownloadsTab(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 0.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
@@ -1455,10 +1613,11 @@ fun DownloadsTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text(text = "Downloaded", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text(text = "Downloads", fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold)
                     Text(
                         text = "${downloadedFiles.size} APK${if (downloadedFiles.size != 1) "s" else ""} downloaded",
-                        fontSize = 12.sp,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -1507,7 +1666,7 @@ fun DownloadsTab(
                 }
             }
         } else {
-            items(downloadedFiles, key = { it.packageName }) { info ->
+            items(downloadedFiles, key = { it.filePath }) { info ->
                 val storeApp = storeApps.find { it.packageName == info.packageName }
                 var showDlDesc by remember { mutableStateOf(false) }
                 var showDlDescLong by remember { mutableStateOf(false) }
@@ -1519,7 +1678,7 @@ fun DownloadsTab(
                         ),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = MaterialTheme.colorScheme.surface
                     ),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
@@ -1546,12 +1705,37 @@ fun DownloadsTab(
                                 contentScale = ContentScale.Crop
                             )
                         } else {
-                            Icon(
-                                imageVector = Icons.Default.Download,
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                            val apkIconBitmap = remember(info.filePath) {
+                                try {
+                                    val apkFile = java.io.File(info.filePath)
+                                    if (!apkFile.exists() || !info.filePath.endsWith(".apk", ignoreCase = true)) null
+                                    else {
+                                        val pkgInfo = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, android.content.pm.PackageManager.GET_ACTIVITIES)
+                                        val appInfo = pkgInfo?.applicationInfo ?: return@remember null
+                                        appInfo.sourceDir = apkFile.absolutePath
+                                        appInfo.publicSourceDir = apkFile.absolutePath
+                                        appInfo.loadIcon(context.packageManager).toBitmap(192, 192).asImageBitmap()
+                                    }
+                                } catch (_: Exception) { null }
+                            }
+                            if (apkIconBitmap != null) {
+                                Image(
+                                    bitmap = apkIconBitmap,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .border(0.5.dp, iconBorderColor, RoundedCornerShape(10.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(12.dp))
@@ -1565,27 +1749,32 @@ fun DownloadsTab(
                                 overflow = TextOverflow.Ellipsis,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            Text(
-                                text = info.packageName,
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            val dlPlatform = storeApps.find { it.packageName == info.packageName }?.platform
+                            if (dlPlatform != "Windows") {
+                                Text(
+                                    text = info.packageName,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             if (info.versionCode > 0) {
                                 val installedVer = remember { try { context.packageManager.getPackageInfo(info.packageName, 0).versionName } catch (_: Exception) { null } }
                                 val installedCode = remember { try { context.packageManager.getPackageInfo(info.packageName, 0).let { androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(it).toInt() } } catch (_: Exception) { 0 } }
                                 val driveApp = storeApps.find { it.packageName == info.packageName }
                                 val driveNewer = driveApp != null && driveApp.versionCode > maxOf(info.versionCode, installedCode)
+                                val verText = when {
+                                    driveNewer -> "v${installedVer ?: info.versionName ?: info.versionCode} → v${driveApp!!.versionName}"
+                                    installedVer != null -> "v$installedVer"
+                                    driveApp != null -> "v${driveApp.versionName}"
+                                    else -> "v${info.versionName ?: info.versionCode}"
+                                }
+                                val sizeSuffix = if (info.fileSize > 0) " • ${formatFileSize(info.fileSize)}" else ""
                                 Text(
-                                    text = when {
-                                        driveNewer -> "v${installedVer ?: info.versionName ?: info.versionCode} → v${driveApp!!.versionName}"
-                                        installedVer != null -> "v$installedVer"
-                                        driveApp != null -> "v${driveApp.versionName}"
-                                        else -> "v${info.versionName ?: info.versionCode}"
-                                    },
-                                    fontSize = 10.sp,
-                                    lineHeight = 10.sp,
+                                    text = verText + sizeSuffix,
+                                    fontSize = versionFontSizeNarrow(verText + sizeSuffix),
+                                    lineHeight = 13.sp,
                                     color = if (driveNewer) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -1593,14 +1782,6 @@ fun DownloadsTab(
                                 val dateFmt = remember { java.text.SimpleDateFormat("MMM dd, yyyy hh:mm a", java.util.Locale.US) }
                                 Text(
                                     text = "Downloaded: ${dateFmt.format(java.util.Date(info.lastModified))}",
-                                    fontSize = 8.sp,
-                                    lineHeight = 8.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                )
-                            }
-                            if (info.fileSize > 0) {
-                                Text(
-                                    text = formatFileSize(info.fileSize),
                                     fontSize = 8.sp,
                                     lineHeight = 8.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -2051,36 +2232,47 @@ fun AppDescriptionDialog(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     if (forced) {
+                        val isDownloadingState = downloadState is DownloadState.Progress || downloadState is DownloadState.Completed
+                        val dialogDarkMode = isSystemInDarkTheme()
                         Button(
                             onClick = { onForcedUpdateClick?.invoke() },
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (downloadState is DownloadState.Progress || downloadState is DownloadState.Completed)
-                                    MaterialTheme.colorScheme.surfaceVariant
-                                else Color(0xFFFF7F7F)
+                                containerColor = when {
+                                    isDownloadingState && dialogDarkMode -> Color(0xFF424242)
+                                    isDownloadingState -> MaterialTheme.colorScheme.surfaceVariant
+                                    else -> Color(0xFFFF7F7F)
+                                },
+                                contentColor = if (isDownloadingState && !dialogDarkMode)
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                else Color.White
                             ),
                             shape = RoundedCornerShape(14.dp)
                         ) {
+                            // Downloading states: white text on dark gray in OLED, black text on light gray in light mode
+                            val downloadingContentColor = if (dialogDarkMode) Color.White else Color.Black
+                            // Red action buttons: black text in light mode, white in dark/OLED
+                            val actionContentColor = if (dialogDarkMode) Color.White else Color.Black
                             when (val st = downloadState) {
                                 is DownloadState.Progress -> {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = downloadingContentColor)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Downloading... ${(st.percentage * 100).toInt()}%", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                    Text("Downloading... ${(st.percentage * 100).toInt()}%", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = downloadingContentColor)
                                 }
                                 is DownloadState.Downloaded -> {
-                                    Icon(Icons.Default.GetApp, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                    Icon(Icons.Default.GetApp, contentDescription = null, modifier = Modifier.size(16.dp), tint = actionContentColor)
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Install Update", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                    Text("Install Update", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = actionContentColor)
                                 }
                                 is DownloadState.Completed -> {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = downloadingContentColor)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Installing...", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                    Text("Installing...", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = downloadingContentColor)
                                 }
                                 else -> {
-                                    Icon(Icons.Default.SystemUpdateAlt, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                    Icon(Icons.Default.SystemUpdateAlt, contentDescription = null, modifier = Modifier.size(16.dp), tint = actionContentColor)
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Update Available", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                    Text("Update Available", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = actionContentColor)
                                 }
                             }
                         }
@@ -2124,7 +2316,8 @@ fun AppDescriptionDialog(
                                 onClick = {
                                     onDismiss()
                                     val overview = descText.lines().dropWhile { !it.trim().startsWith("## Overview") }.drop(1).takeWhile { !it.trim().startsWith("## ") }.joinToString(" ").trim().replace("**", "").replace("* ", "").replace("- ", "")
-                                    val shareText = "Check out ${app.name} — ${overview.take(200)}\n\nDownload: https://drive.google.com/uc?export=download&id=${app.driveFileId}"
+                                    val dlLink = if (app.driveFileId.startsWith("manifest_")) app.downloadUrl else "https://drive.google.com/uc?export=download&id=${app.driveFileId}"
+                                    val shareText = "Check out ${app.name} — ${overview.take(200)}\n\nDownload: $dlLink"
                                     val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                                         type = "text/plain"
                                         putExtra(android.content.Intent.EXTRA_TEXT, shareText)
@@ -2177,7 +2370,7 @@ fun AppDescriptionDialog(
                                     )
                                 }
                             }
-                        } else {
+                        } else if (app.platform != "Windows") {
                             Button(
                                 onClick = {
                                     onDismiss()
@@ -2236,9 +2429,20 @@ private fun versionFontSize(text: String): androidx.compose.ui.unit.TextUnit {
     val len = text.length
     return when {
         len <= 10 -> 11.sp
-        len <= 15 -> 10.sp
-        len <= 20 -> 9.sp
-        else -> 8.sp
+        len <= 20 -> 10.sp
+        len <= 30 -> 9.sp
+        else -> 9.sp
+    }
+}
+
+// Tighter thresholds for narrow cards with an extra button (Installed Apps, Downloads)
+private fun versionFontSizeNarrow(text: String): androidx.compose.ui.unit.TextUnit {
+    val len = text.length
+    return when {
+        len <= 8 -> 11.sp
+        len <= 16 -> 10.sp
+        len <= 24 -> 9.sp
+        else -> 9.sp
     }
 }
 
@@ -2258,6 +2462,7 @@ private data class DownloadedAppInfo(
 @Composable
 fun SettingsTab(
     viewModel: StoreViewModel,
+    authViewModel: AuthViewModel,
     onForceSync: () -> Unit,
     isSyncing: Boolean,
     onStartSelfUpdate: () -> Unit = {}
@@ -2265,7 +2470,6 @@ fun SettingsTab(
     val context = LocalContext.current
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useDeviceTheme by viewModel.useDeviceTheme.collectAsState()
-    val autoUpdateCheck by viewModel.autoUpdateCheck.collectAsState()
     val totalUsers by viewModel.totalUsers.collectAsState()
     val downloadStates by viewModel.downloadStates.collectAsState()
     val iconBorderColor = if (isSystemInDarkTheme()) Color(0xFFE5E4E2) else Color(0xFF333333)
@@ -2274,39 +2478,75 @@ fun SettingsTab(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            viewModel.setAutoUpdateCheck(true)
             Toast.makeText(context, "Notifications enabled", Toast.LENGTH_SHORT).show()
         } else {
             Toast.makeText(context, "Notification permission denied", Toast.LENGTH_SHORT).show()
         }
     }
 
-    val boxColor = if (isDarkMode) {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+    // Update check always runs: force-enable and ask notification permission once
+    LaunchedEffect(Unit) {
+        viewModel.setAutoUpdateCheck(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val storePrefs = context.getSharedPreferences("drive_store_prefs", android.content.Context.MODE_PRIVATE)
+            val granted = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted && !storePrefs.getBoolean("notif_perm_asked", false)) {
+                storePrefs.edit().putBoolean("notif_perm_asked", true).apply()
+                notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
     }
+
+    val boxColor = MaterialTheme.colorScheme.surface
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 0.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // Header
         item {
-            Text(
-                text = "Settings", 
-                fontSize = 24.sp, 
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                text = "Manage preferences and theme settings.",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column(modifier = Modifier.padding(4.dp)) {
+                Text("Settings", fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Manage your account, profile, app preferences, and theme.", fontSize = 10.sp, lineHeight = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
-        // Section: General Settings
+        // Avatar Card
+        item {
+            val currentUser by authViewModel.currentUser.collectAsState()
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = boxColor),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF0D47A1)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val initial = (currentUser?.displayName ?: currentUser?.email ?: "U").take(1).uppercase()
+                        Text(initial, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text(currentUser?.displayName ?: "Guest User", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(currentUser?.email ?: "Not signed in", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+
+        // Section: General
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -2315,70 +2555,29 @@ fun SettingsTab(
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "General Settings",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
+                    Text("GENERAL", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // Device Theme Toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.PhoneAndroid,
-                                contentDescription = "Device Theme",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Icon(Icons.Default.PhoneAndroid, contentDescription = "Device Theme", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Device Theme", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                Text("Automatically switch theme based on system", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
-                            }
+                            Text("Device Theme", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         }
-                        Switch(
-                            checked = useDeviceTheme,
-                            onCheckedChange = { enabled ->
-                                viewModel.setUseDeviceTheme(enabled)
-                                if (enabled) viewModel.setDarkMode(false)
-                            }
-                        )
+                        Switch(checked = useDeviceTheme, onCheckedChange = { enabled -> viewModel.setUseDeviceTheme(enabled); if (enabled) viewModel.setDarkMode(false) })
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
 
                     // Oled Theme Toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.DarkMode, 
-                                contentDescription = "Dark Theme",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Icon(Icons.Default.DarkMode, contentDescription = "Dark Theme", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Oled Theme", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                Text("Use oled backdrop for eye comfort", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
-                            }
+                            Text("OLED Theme", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         }
-                        Switch(
-                            checked = isDarkMode,
-                            onCheckedChange = { enabled ->
-                                viewModel.setDarkMode(enabled)
-                                if (enabled) viewModel.setUseDeviceTheme(false)
-                            }
-                        )
+                        Switch(checked = isDarkMode, onCheckedChange = { enabled -> viewModel.setDarkMode(enabled); if (enabled) viewModel.setUseDeviceTheme(false) })
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
@@ -2388,560 +2587,465 @@ fun SettingsTab(
                     val autoDeleteDays by viewModel.autoDeleteDays.collectAsState()
                     val showDeleteDaysPicker = remember { mutableStateOf(false) }
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.DeleteSweep,
-                                    contentDescription = "Auto-delete",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Icon(Icons.Default.DeleteSweep, contentDescription = "Auto-delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column {
-                                    Text("Delete old downloads", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                    Text("Delete Old Downloads", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                     if (autoDeleteDownloads) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text("Delete files older than ", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
-                                            Text(
-                                                "$autoDeleteDays days",
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.clickable { showDeleteDaysPicker.value = true }
-                                            )
+                                            Text(if (autoDeleteDays == 1) "1 day" else "$autoDeleteDays days", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { showDeleteDaysPicker.value = true })
                                         }
                                     }
                                 }
                             }
-                            Switch(
-                                checked = autoDeleteDownloads,
-                                onCheckedChange = { viewModel.setAutoDeleteDownloads(it) }
-                            )
+                            Switch(checked = autoDeleteDownloads, onCheckedChange = { viewModel.setAutoDeleteDownloads(it) })
                         }
                         if (showDeleteDaysPicker.value) {
                             LaunchedEffect(showDeleteDaysPicker.value) {
                                 val options = (1..30).toList()
-                                android.app.AlertDialog.Builder(context)
-                                    .setTitle("Delete files older than")
-                                    .setItems(options.map { "$it days" }.toTypedArray()) { _, which ->
-                                        showDeleteDaysPicker.value = false
-                                        viewModel.setAutoDeleteDays(options[which])
-                                    }
-                                    .setOnDismissListener { showDeleteDaysPicker.value = false }
-                                    .show()
+                                android.app.AlertDialog.Builder(context).setTitle("Delete files older than").setItems(options.map { if (it == 1) "1 day" else "$it days" }.toTypedArray()) { _, which -> showDeleteDaysPicker.value = false; viewModel.setAutoDeleteDays(options[which]) }.setOnDismissListener { showDeleteDaysPicker.value = false }.show()
                             }
                         }
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
 
-                    // Auto Update Toggle
+                    // Auto Updates Toggle
+                    val autoDownloadUpdates by viewModel.autoDownloadUpdates.collectAsState()
+                    var checkIntervalMin by remember { mutableStateOf(viewModel.getCheckIntervalMinutes()) }
+                    val showIntervalPicker = remember { mutableStateOf(false) }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Download, contentDescription = "Auto Updates", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Auto Updates", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(
+                                    "Automatically download updates in the background and notify you when they are ready to install.",
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                    textAlign = TextAlign.Justify,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                )
+                                val retryAnnotated = buildAnnotatedString {
+                                    append("Retry every ")
+                                    pushStringAnnotation("interval", "pick")
+                                    withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+                                        append(com.example.util.AutoDownloadHelper.formatInterval(checkIntervalMin))
+                                    }
+                                    pop()
+                                    append(" if the download fails.")
+                                }
+                                ClickableText(
+                                    text = retryAnnotated,
+                                    style = TextStyle(
+                                        fontSize = 11.sp,
+                                        lineHeight = 15.sp,
+                                        textAlign = TextAlign.Justify,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    ),
+                                    onClick = { offset ->
+                                        retryAnnotated.getStringAnnotations("interval", offset, offset)
+                                            .firstOrNull()?.let { showIntervalPicker.value = true }
+                                    }
+                                )
+                            }
+                        }
+                        Switch(checked = autoDownloadUpdates, onCheckedChange = { viewModel.setAutoDownloadUpdates(it) })
+                    }
+                    if (showIntervalPicker.value) {
+                        LaunchedEffect(showIntervalPicker.value) {
+                            val options = listOf(5, 10, 15, 30, 60, 120, 180, 240, 360, 480, 720, 1440)
+                            android.app.AlertDialog.Builder(context).setTitle("Check interval").setItems(options.map { com.example.util.AutoDownloadHelper.formatInterval(it) }.toTypedArray()) { _, which -> val m = options[which]; showIntervalPicker.value = false; checkIntervalMin = m; viewModel.setCheckIntervalMinutes(m) }.setOnDismissListener { showIntervalPicker.value = false }.show()
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section: Account
+        item {
+            val currentUser by authViewModel.currentUser.collectAsState()
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = boxColor),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("ACCOUNT", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Sign Out
+                    var showLogoutConfirm by remember { mutableStateOf(false) }
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { showLogoutConfirm = true }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.NotificationsActive, 
-                                contentDescription = "Notifications",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text("Update Notifications", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Icon(Icons.Filled.Logout, contentDescription = "Sign Out", tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Log out", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (showLogoutConfirm) {
+                        LaunchedEffect(showLogoutConfirm) {
+                            android.app.AlertDialog.Builder(context).setTitle("Log out").setMessage("Are you sure you want to log out?").setPositiveButton("Log out") { _, _ -> showLogoutConfirm = false; authViewModel.signOut() }.setNegativeButton("Cancel") { _, _ -> showLogoutConfirm = false }.setOnDismissListener { showLogoutConfirm = false }.show()
                         }
-                        Switch(
-                            checked = autoUpdateCheck,
-                            onCheckedChange = { enabled ->
-                                if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                                } else {
-                                    viewModel.setAutoUpdateCheck(enabled)
-                                }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                    // Reset Password
+                    var showResetConfirm by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { showResetConfirm = true }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.LockReset, contentDescription = "Reset Password", tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Reset password", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (showResetConfirm) {
+                        LaunchedEffect(showResetConfirm) {
+                            val email = currentUser?.email ?: ""
+                            android.app.AlertDialog.Builder(context).setTitle("Reset Password").setMessage("Send a password reset link to $email?").setPositiveButton("Send") { _, _ -> showResetConfirm = false; if (email.isNotEmpty()) { authViewModel.sendResetEmail(email); Toast.makeText(context, "Reset link sent to $email", Toast.LENGTH_SHORT).show() } }.setNegativeButton("Cancel") { _, _ -> showResetConfirm = false }.setOnDismissListener { showResetConfirm = false }.show()
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                    // Delete Account
+                    var showDeleteConfirm by remember { mutableStateOf(false) }
+                    var showReauthGoogle by remember { mutableStateOf(false) }
+                    var showReauthPassword by remember { mutableStateOf(false) }
+                    val authErr by authViewModel.authError.collectAsState()
+
+                    LaunchedEffect(authErr) {
+                        if (authErr == "REAUTH_NEEDED") {
+                            authViewModel.clearError()
+                            val user = authViewModel.currentUser.value
+                            val isGoogleUser = user?.providerData?.any { it.providerId == "google.com" } == true
+                            if (isGoogleUser) showReauthGoogle = true else showReauthPassword = true
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { showDeleteConfirm = true }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.DeleteForever, contentDescription = "Delete Account", tint = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Delete account", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    if (showDeleteConfirm) {
+                        AlertDialog(
+                            onDismissRequest = { showDeleteConfirm = false },
+                            title = { Text("Delete Account") },
+                            text = { Text("This will permanently delete your account and all saved data. This action cannot be undone.") },
+                            confirmButton = {
+                                TextButton(onClick = { showDeleteConfirm = false; authViewModel.deleteAccount() }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
                             }
                         )
                     }
-                    if (autoUpdateCheck) {
-                        val notifHour = remember { mutableStateOf(viewModel.getNotifHour()) }
-                        val notifMinute = remember { mutableStateOf(viewModel.getNotifMinute()) }
-                        val intervalHours = remember { mutableStateOf(viewModel.getNotifIntervalHours()) }
-                        val showTimePicker = remember { mutableStateOf(false) }
-                        val showIntervalPicker = remember { mutableStateOf(false) }
 
-                        Column(modifier = Modifier.padding(start = 36.dp).offset(y = (-8).dp)) {
-                            val timeLabel = remember(notifHour.value, notifMinute.value) {
-                                val h = notifHour.value; val m = notifMinute.value
-                                val period = if (h < 12) "AM" else "PM"
-                                val hour12 = when { h == 0 -> 12; h > 12 -> h - 12; else -> h }
-                                "${hour12}:${String.format("%02d", m)} $period"
+                    if (showReauthGoogle) {
+                        val reauthCtx = LocalContext.current
+                        val reauthLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                            if (result.resultCode == Activity.RESULT_OK) {
+                                val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                                try {
+                                    val account = task.getResult(ApiException::class.java)
+                                    account?.idToken?.let { authViewModel.reauthAndDelete(it) }
+                                } catch (e: Exception) {
+                                    Toast.makeText(reauthCtx, "Re-authentication cancelled", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                Toast.makeText(reauthCtx, "Re-authentication cancelled", Toast.LENGTH_SHORT).show()
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "Starts at ",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
-                                Text(
-                                    timeLabel,
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.clickable { showTimePicker.value = true }
-                                )
-                                Text(
-                                    ", repeats every ",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
-                                Text(
-                                    "${intervalHours.value} hours",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.clickable { showIntervalPicker.value = true }
-                                )
-                            }
+                            showReauthGoogle = false
                         }
+                        LaunchedEffect(Unit) {
+                            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                                .requestIdToken(reauthCtx.getString(R.string.default_web_client_id))
+                                .requestEmail()
+                                .build()
+                            val client = GoogleSignIn.getClient(reauthCtx, gso)
+                            client.signOut().addOnCompleteListener { reauthLauncher.launch(client.signInIntent) }
+                        }
+                    }
 
-                        if (showTimePicker.value) {
-                            LaunchedEffect(showTimePicker.value) {
-                                android.app.TimePickerDialog(
-                                    context,
-                                    { _, h, m ->
-                                        showTimePicker.value = false
-                                        notifHour.value = h; notifMinute.value = m
-                                        viewModel.setNotifTime(h, m)
-                                    },
-                                    notifHour.value, notifMinute.value, false
-                                ).apply {
-                                    setOnDismissListener { showTimePicker.value = false }
-                                }.show()
+                    if (showReauthPassword) {
+                        var reauthPass by remember { mutableStateOf("") }
+                        AlertDialog(
+                            onDismissRequest = { showReauthPassword = false },
+                            title = { Text("Verify Identity") },
+                            text = {
+                                Column {
+                                    Text("Enter your password to confirm account deletion")
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    OutlinedTextField(
+                                        value = reauthPass,
+                                        onValueChange = { reauthPass = it },
+                                        label = { Text("Password") },
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showReauthPassword = false
+                                    authViewModel.reauthWithEmailPassword(
+                                        authViewModel.currentUser.value?.email ?: "",
+                                        reauthPass
+                                    )
+                                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showReauthPassword = false }) { Text("Cancel") }
                             }
-                        }
-                        if (showIntervalPicker.value) {
-                            LaunchedEffect(showIntervalPicker.value) {
-                                val options = listOf(1, 2, 3, 4, 6, 8, 12, 24, 48)
-                                android.app.AlertDialog.Builder(context)
-                                    .setTitle("Check interval")
-                                    .setItems(options.map { "$it hours" }.toTypedArray()) { _, which ->
-                                        val h = options[which]
-                                        showIntervalPicker.value = false
-                                        intervalHours.value = h
-                                        viewModel.setNotifIntervalHours(h)
-                                    }
-                                    .setOnDismissListener { showIntervalPicker.value = false }
-                                    .show()
-                            }
+                        )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                    // Clear Cache & Data
+                    var showClearConfirm by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { showClearConfirm = true }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.CleaningServices, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Clear cache & data", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (showClearConfirm) {
+                        LaunchedEffect(showClearConfirm) {
+                            android.app.AlertDialog.Builder(context).setTitle("Clear Cache & Data").setMessage("This will delete all downloaded apps, clear cached data and app database. The app will re-sync from Drive on next launch.").setPositiveButton("Clear") { _, _ -> showClearConfirm = false; viewModel.clearAppCache(); Toast.makeText(context, "Cache cleared. Restarting...", Toast.LENGTH_SHORT).show(); android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ val intent = context.packageManager.getLaunchIntentForPackage(context.packageName); if (intent != null) { intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK); context.startActivity(intent) }; Runtime.getRuntime().exit(0) }, 500) }.setNegativeButton("Cancel", null).show()
                         }
                     }
                 }
             }
         }
 
-        // Section: Update App Store
+        // Section: More
         item {
-            val selfUpdateApp by viewModel.selfUpdateApp.collectAsState()
-            val selfDownloadState = downloadStates[context.packageName]
-            val installedCode = try {
-                val info = context.packageManager.getPackageInfo(context.packageName, 0)
-                androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info).toInt()
-            } catch (_: Exception) { 0 }
-            val installedName = try {
-                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
-            } catch (_: Exception) { "" }
-            var isChecking by remember { mutableStateOf(false) }
-            var checkResult by remember { mutableStateOf<String?>(null) }
-            val hasUpdate = selfUpdateApp != null && viewModel.isUpdateAvailable(selfUpdateApp!!, installedCode, installedName) && selfUpdateApp!!.versionName != installedName
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable {
-                        if (selfDownloadState is DownloadState.Downloaded) {
-                            viewModel.installDownloadedApp(context.packageName)
-                            return@clickable
-                        }
-                        if (selfDownloadState is DownloadState.Progress || selfDownloadState is DownloadState.Completed) return@clickable
-                        isChecking = true
-                        checkResult = null
-                        viewModel.forceSync {
-                            isChecking = false
-                            val updatedApp = viewModel.selfUpdateApp.value
-                            val updatedHasUpdate = updatedApp != null && viewModel.isUpdateAvailable(updatedApp, installedCode, installedName) && updatedApp.versionName != installedName
-                            if (updatedHasUpdate) {
-                                checkResult = null
-                                onStartSelfUpdate()
-                            } else {
-                                checkResult = "Latest version already installed"
-                            }
-                        }
-                    }
-                    .background(boxColor, RoundedCornerShape(16.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-                    .padding(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = boxColor),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
             ) {
-                Text(
-                    text = when {
-                        isChecking -> "Checking for update..."
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("MORE", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Update App
+                    val selfUpdateApp by viewModel.selfUpdateApp.collectAsState()
+                    val selfDownloadState = downloadStates[context.packageName]
+                    val installedCode = try { val info = context.packageManager.getPackageInfo(context.packageName, 0); androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info).toInt() } catch (_: Exception) { 0 }
+                    val installedName = try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
+                    val hasUpdate = selfUpdateApp != null && viewModel.isUpdateAvailable(selfUpdateApp!!, installedCode, installedName) && selfUpdateApp!!.versionName != installedName
+                    val updateText = when {
                         selfDownloadState is DownloadState.Progress -> "Downloading... ${(selfDownloadState.percentage * 100).toInt()}%"
                         selfDownloadState is DownloadState.Downloaded -> "Install Update"
                         selfDownloadState is DownloadState.Completed -> "Installing..."
-                        hasUpdate -> "Update Available"
-                        else -> "Update"
-                    },
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
-                )
-                if (checkResult != null) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = checkResult!!,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        }
-
-        // Section: Share App Store
-        item {
-            val selfUpdateApp by viewModel.selfUpdateApp.collectAsState()
-            val selfDriveId = selfUpdateApp?.driveFileId ?: ""
-            var selfShareDesc by remember { mutableStateOf("") }
-            LaunchedEffect(Unit) {
-                viewModel.fetchSelfUpdateDescription { selfShareDesc = it }
-            }
-            Text(
-                text = "Share",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable {
-                        try {
-                            val overview = selfShareDesc.lines().dropWhile { !it.trim().startsWith("## Overview") }.drop(1).takeWhile { !it.trim().startsWith("## ") }.joinToString(" ").trim().replace("**", "").replace("* ", "").replace("- ", "")
-                            val shareText = "Check out App Store — ${overview.take(200)}\n\nDownload: https://drive.google.com/uc?export=download&id=$selfDriveId"
-                            val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(android.content.Intent.EXTRA_TEXT, shareText)
-                            }
-                            context.startActivity(android.content.Intent.createChooser(shareIntent, "Share"))
-                        } catch (_: Exception) { }
+                        hasUpdate -> "Update available"
+                        else -> "Update App"
                     }
-                    .background(boxColor, RoundedCornerShape(16.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-                    .padding(10.dp),
-                textAlign = TextAlign.Center
-            )
-        }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
+                            if (selfDownloadState is DownloadState.Downloaded) { viewModel.installDownloadedApp(context.packageName); return@clickable }
+                            if (selfDownloadState is DownloadState.Progress || selfDownloadState is DownloadState.Completed) return@clickable
+                            viewModel.forceSync {
+                                val updatedApp = viewModel.selfUpdateApp.value
+                                val updatedHasUpdate = updatedApp != null && viewModel.isUpdateAvailable(updatedApp, installedCode, installedName) && updatedApp.versionName != installedName
+                                if (updatedHasUpdate) onStartSelfUpdate()
+                                else Toast.makeText(context, "Latest version installed", Toast.LENGTH_SHORT).show()
+                            }
+                        }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.SystemUpdateAlt, contentDescription = "Update App", tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(updateText, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        if (hasUpdate || selfDownloadState is DownloadState.Progress) {
+                            Badge(containerColor = MaterialTheme.colorScheme.primary) { Text("!", fontSize = 10.sp) }
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
 
-        // Section: About App
-        item {
-            var showAbout by remember { mutableStateOf(false) }
-            Text(
-                text = "About App",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { showAbout = true }
-                    .background(boxColor, RoundedCornerShape(16.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-                    .padding(10.dp),
-                textAlign = TextAlign.Center
-            )
-            if (showAbout) {
-                var aboutDesc by remember { mutableStateOf("") }
-                LaunchedEffect(Unit) {
-                    viewModel.fetchSelfUpdateDescription { aboutDesc = it }
-                }
-                AlertDialog(
-                    onDismissRequest = { showAbout = false },
-                    title = {},
-                    text = {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.app_store_icon),
-                                contentDescription = "App Store Icon",
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .border(0.5.dp, iconBorderColor, RoundedCornerShape(12.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                            Text("App Store", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            if (aboutDesc.isNotEmpty()) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    for (line in aboutDesc.lines()) {
-                                        val trimmed = line.trim()
-                                        if (trimmed.isEmpty()) continue
-                                        if (trimmed.startsWith("## ") || trimmed.startsWith("# ")) {
-                                            val headingText = trimmed.removePrefix("### ").removePrefix("## ").removePrefix("# ")
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = headingText,
-                                                fontSize = 15.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        } else if (trimmed.startsWith("* ") || trimmed.startsWith("- ")) {
-                                            val bulletText = trimmed.removePrefix("* ").removePrefix("- ")
-                                            val parts = bulletText.split(" — ", limit = 2)
-                                            Row(modifier = Modifier.padding(start = 4.dp, top = 2.dp)) {
-                                                Text("\u2022 ", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                if (parts.size == 2) {
-                                                    val label = parts[0].replace("**", "")
-                                                    Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    Text(" \u2014 ${parts[1]}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                    // Share App
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
+                            try {
+                                val shareText = "Check out App Store \u2014 A modern app store that syncs apps from Google Drive. Browse, download, install, and manage app updates, all in one convenient place.\n\nDownload: https://u2l.ai/AppStore"
+                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(android.content.Intent.EXTRA_TEXT, shareText) }
+                                context.startActivity(android.content.Intent.createChooser(shareIntent, "Share"))
+                            } catch (_: Exception) { }
+                        }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = "Share App", tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Share App", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                    // About App
+                    var showAbout by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { showAbout = true }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = "About", tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("About App", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (showAbout) {
+                        var aboutDesc by remember { mutableStateOf("") }
+                        LaunchedEffect(Unit) { viewModel.fetchSelfUpdateDescription { aboutDesc = it } }
+                        AlertDialog(
+                            onDismissRequest = { showAbout = false },
+                            title = {},
+                            text = {
+                                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Image(painter = painterResource(id = R.drawable.app_store_icon), contentDescription = "App Store Icon", modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).border(0.5.dp, iconBorderColor, RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+                                    Text("App Store", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    if (aboutDesc.isNotEmpty()) {
+                                        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            for (line in aboutDesc.lines()) {
+                                                val trimmed = line.trim()
+                                                if (trimmed.isEmpty()) continue
+                                                if (trimmed.startsWith("## ") || trimmed.startsWith("# ")) {
+                                                    val headingText = trimmed.removePrefix("### ").removePrefix("## ").removePrefix("# ")
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    Text(text = headingText, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                                } else if (trimmed.startsWith("* ") || trimmed.startsWith("- ")) {
+                                                    val bulletText = trimmed.removePrefix("* ").removePrefix("- ")
+                                                    val parts = bulletText.split(" — ", limit = 2)
+                                                    Row(modifier = Modifier.padding(start = 4.dp, top = 2.dp)) {
+                                                        Text("\u2022 ", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                        if (parts.size == 2) { val label = parts[0].replace("**", ""); Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant); Text(" \u2014 ${parts[1]}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } else { Text(bulletText.replace("**", ""), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                                    }
                                                 } else {
-                                                    Text(bulletText.replace("**", ""), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    Text(text = trimmed.replace("**", ""), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Justify, lineHeight = 20.sp)
                                                 }
                                             }
-                                        } else {
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                text = trimmed.replace("**", ""),
-                                                fontSize = 13.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                textAlign = TextAlign.Justify,
-                                                lineHeight = 20.sp
-                                            )
                                         }
                                     }
                                 }
-                            }
-                        }
-                    },
-                    confirmButton = {}
-                )
-            }
-        }
-
-        // Clear Cache & Data
-        item {
-            var showClearConfirm by remember { mutableStateOf(false) }
-            Text(
-                text = "Clear Cache & Data",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { showClearConfirm = true }
-                    .background(boxColor, RoundedCornerShape(16.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-                    .padding(10.dp),
-                textAlign = TextAlign.Center
-            )
-            if (showClearConfirm) {
-                LaunchedEffect(showClearConfirm) {
-                    android.app.AlertDialog.Builder(context)
-                        .setTitle("Clear Cache & Data")
-                        .setMessage("This will delete all downloaded apps, clear cached data and app database. The app will re-sync from Drive on next launch.")
-                        .setPositiveButton("Clear") { _, _ ->
-                            showClearConfirm = false
-                            viewModel.clearAppCache()
-                            Toast.makeText(context, "Cache cleared. Restarting...", Toast.LENGTH_SHORT).show()
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                                if (intent != null) {
-                                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                                    context.startActivity(intent)
-                                }
-                                Runtime.getRuntime().exit(0)
-                            }, 500)
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                }
-            }
-        }
-
-        // Section: Contact Developer
-        item {
-            var showContact by remember { mutableStateOf(false) }
-            var contactEntries by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-            var developerName by remember { mutableStateOf("Contact Developer") }
-            LaunchedEffect(Unit) {
-                viewModel.fetchContactMd { md ->
-                    val nameEntry = md.lines().firstOrNull {
-                        it.trim().removePrefix("- ").removePrefix("* ").lowercase().startsWith("name:")
+                            },
+                            confirmButton = {}
+                        )
                     }
-                    if (nameEntry != null) {
-                        val name = nameEntry.trim().removePrefix("- ").removePrefix("* ").split(":", limit = 2).getOrNull(1)?.trim()
-                        if (!name.isNullOrEmpty()) developerName = name
+
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                    // Contact Developer
+                    var showContact by remember { mutableStateOf(false) }
+                    var contactEntries by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+                    var developerName by remember { mutableStateOf("Contact Developer") }
+                    LaunchedEffect(Unit) { viewModel.fetchContactMd { md -> val nameEntry = md.lines().firstOrNull { it.trim().removePrefix("- ").removePrefix("* ").lowercase().startsWith("name:") }; if (nameEntry != null) { val name = nameEntry.trim().removePrefix("- ").removePrefix("* ").split(":", limit = 2).getOrNull(1)?.trim(); if (!name.isNullOrEmpty()) developerName = name } } }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
+                            if (contactEntries.isEmpty()) { viewModel.fetchContactMd { md -> val entries = mutableListOf<Pair<String, String>>(); for (line in md.lines()) { val trimmed = line.trim().removePrefix("- ").removePrefix("* "); if (trimmed.contains(":")) { val parts = trimmed.split(":", limit = 2); val label = parts[0].trim(); val value = parts[1].trim(); if (label.isNotEmpty() && value.isNotEmpty()) entries.add(label to value) } }; contactEntries = entries; showContact = true } } else { showContact = true }
+                        }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Email, contentDescription = "Contact", tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Contact developer", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                }
-            }
-            Text(
-                text = "Contact Developer",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable {
-                        if (contactEntries.isEmpty()) {
-                            viewModel.fetchContactMd { md ->
-                                val entries = mutableListOf<Pair<String, String>>()
-                                for (line in md.lines()) {
-                                    val trimmed = line.trim().removePrefix("- ").removePrefix("* ")
-                                    if (trimmed.contains(":")) {
-                                        val parts = trimmed.split(":", limit = 2)
-                                        val label = parts[0].trim()
-                                        val value = parts[1].trim()
-                                        if (label.isNotEmpty() && value.isNotEmpty()) {
-                                            entries.add(label to value)
+                    if (showContact && contactEntries.isNotEmpty()) {
+                        val descriptionEntry = contactEntries.firstOrNull { it.first.lowercase() == "description" }
+                        AlertDialog(
+                            onDismissRequest = { showContact = false },
+                            title = { Text(developerName, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, fontSize = 22.sp, modifier = Modifier.fillMaxWidth()) },
+                            text = {
+                                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    if (descriptionEntry != null) {
+                                        Text(text = descriptionEntry.second, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp))
+                                    }
+                                    for ((label, value) in contactEntries) {
+                                        val lowerLabel = label.lowercase()
+                                        if (lowerLabel == "name" || lowerLabel == "developer" || lowerLabel == "description") continue
+                                        val contactIcon: @Composable () -> Unit = when {
+                                            lowerLabel.contains("whatsapp") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_whatsapp), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF25D366)) } }
+                                            lowerLabel.contains("messenger") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_messenger), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF0084FF)) } }
+                                            lowerLabel.contains("instagram") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_instagram), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFE4405F)) } }
+                                            lowerLabel.contains("github") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_github), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF9E9E9E)) } }
+                                            lowerLabel.contains("mobile") || lowerLabel.contains("phone") || lowerLabel.contains("call") -> { { Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
+                                            lowerLabel.contains("facebook") -> { { Icon(Icons.Default.Facebook, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF1877F2)) } }
+                                            lowerLabel.contains("telegram") -> { { Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF0088CC)) } }
+                                            lowerLabel.contains("email") || lowerLabel.contains("mail") -> { { Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
+                                            lowerLabel.contains("twitter") || lowerLabel.contains("x") -> { { Icon(Icons.Default.AlternateEmail, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
+                                            lowerLabel.contains("website") || lowerLabel.contains("web") -> { { Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
+                                            lowerLabel.contains("location") || lowerLabel.contains("address") -> { { Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
+                                            lowerLabel.contains("name") || lowerLabel.contains("developer") -> { { Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
+                                            else -> { { Icon(Icons.Default.ContactPhone, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                try {
+                                                    val intent = when {
+                                                        lowerLabel.contains("mobile") || lowerLabel.contains("phone") || lowerLabel.contains("call") -> android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:$value"))
+                                                        lowerLabel.contains("whatsapp") -> { val num = value.replace("[^0-9+]".toRegex(), ""); val waValue = if (num.isNotEmpty()) num else value.trim(); android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://wa.me/$waValue")) }
+                                                        lowerLabel.contains("messenger") -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://m.me/$value"))
+                                                        lowerLabel.contains("instagram") -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://instagram.com/$value"))
+                                                        lowerLabel.contains("facebook") -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://facebook.com/$value"))
+                                                        lowerLabel.contains("telegram") -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://t.me/$value"))
+                                                        lowerLabel.contains("email") || lowerLabel.contains("mail") -> android.content.Intent(android.content.Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:$value"))
+                                                        lowerLabel.contains("twitter") || lowerLabel.contains("x") -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://x.com/$value"))
+                                                        lowerLabel.contains("github") -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/$value"))
+                                                        lowerLabel.contains("website") || lowerLabel.contains("web") -> { val url = if (value.startsWith("http")) value else "https://$value"; android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)) }
+                                                        lowerLabel.contains("location") || lowerLabel.contains("address") -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("geo:0,0?q=${java.net.URLEncoder.encode(value, "UTF-8")}"))
+                                                        else -> android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(value))
+                                                    }
+                                                    context.startActivity(intent)
+                                                } catch (_: Exception) { }
+                                            },
+                                            modifier = Modifier.fillMaxWidth().height(44.dp),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            contactIcon()
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                         }
                                     }
                                 }
-                                contactEntries = entries
-                                showContact = true
-                            }
-                        } else {
-                            showContact = true
-                        }
+                            },
+                            confirmButton = {}
+                        )
                     }
-                    .background(boxColor, RoundedCornerShape(16.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-                    .padding(10.dp),
-                textAlign = TextAlign.Center
-            )
-            if (showContact && contactEntries.isNotEmpty()) {
-                val descriptionEntry = contactEntries.firstOrNull { it.first.lowercase() == "description" }
-                AlertDialog(
-                    onDismissRequest = { showContact = false },
-                    title = { Text(developerName, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, fontSize = 22.sp, modifier = Modifier.fillMaxWidth()) },
-                    text = {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            if (descriptionEntry != null) {
-                                Text(
-                                    text = descriptionEntry.second,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    lineHeight = 20.sp,
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
-                                )
-                            }
-                            for ((label, value) in contactEntries) {
-                                val lowerLabel = label.lowercase()
-                                if (lowerLabel == "name" || lowerLabel == "developer" || lowerLabel == "description") continue
-                                val contactIcon: @Composable () -> Unit = when {
-                                    lowerLabel.contains("whatsapp") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_whatsapp), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF25D366)) } }
-                                    lowerLabel.contains("messenger") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_messenger), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF0084FF)) } }
-                                    lowerLabel.contains("instagram") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_instagram), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFE4405F)) } }
-                                    lowerLabel.contains("github") -> { { Icon(androidx.compose.ui.res.painterResource(R.drawable.ic_github), contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF9E9E9E)) } }
-                                    lowerLabel.contains("mobile") || lowerLabel.contains("phone") || lowerLabel.contains("call") -> { { Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
-                                    lowerLabel.contains("facebook") -> { { Icon(Icons.Default.Facebook, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF1877F2)) } }
-                                    lowerLabel.contains("telegram") -> { { Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF0088CC)) } }
-                                    lowerLabel.contains("email") || lowerLabel.contains("mail") -> { { Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
-                                    lowerLabel.contains("twitter") || lowerLabel.contains("x") -> { { Icon(Icons.Default.AlternateEmail, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
-                                    lowerLabel.contains("website") || lowerLabel.contains("web") -> { { Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
-                                    lowerLabel.contains("location") || lowerLabel.contains("address") -> { { Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
-                                    lowerLabel.contains("name") || lowerLabel.contains("developer") -> { { Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
-                                    else -> { { Icon(Icons.Default.ContactPhone, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) } }
-                                }
-                                OutlinedButton(
-                                    onClick = {
-                                        try {
-                                            val intent = when {
-                                                lowerLabel.contains("mobile") || lowerLabel.contains("phone") || lowerLabel.contains("call") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:$value"))
-                                                }
-                                                lowerLabel.contains("whatsapp") -> {
-                                                    val num = value.replace("[^0-9+]".toRegex(), "")
-                                                    val waValue = if (num.isNotEmpty()) num else value.trim()
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://wa.me/$waValue"))
-                                                }
-                                                lowerLabel.contains("messenger") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://m.me/$value"))
-                                                }
-                                                lowerLabel.contains("instagram") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://instagram.com/$value"))
-                                                }
-                                                lowerLabel.contains("facebook") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://facebook.com/$value"))
-                                                }
-                                                lowerLabel.contains("telegram") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://t.me/$value"))
-                                                }
-                                                lowerLabel.contains("email") || lowerLabel.contains("mail") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:$value"))
-                                                }
-                                                lowerLabel.contains("twitter") || lowerLabel.contains("x") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://x.com/$value"))
-                                                }
-                                                lowerLabel.contains("github") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/$value"))
-                                                }
-                                                lowerLabel.contains("website") || lowerLabel.contains("web") -> {
-                                                    val url = if (value.startsWith("http")) value else "https://$value"
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                                                }
-                                                lowerLabel.contains("location") || lowerLabel.contains("address") -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("geo:0,0?q=${java.net.URLEncoder.encode(value, "UTF-8")}"))
-                                                }
-                                                else -> {
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(value))
-                                                }
-                                            }
-                                            context.startActivity(intent)
-                                        } catch (_: Exception) { }
-                                    },
-                                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    contactIcon()
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {}
-                )
+                }
             }
         }
 
         // Version text
         item {
-            val appVerName = try {
-                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
-            } catch (_: Exception) { "" }
-            val appVerCode = try {
-                val info = context.packageManager.getPackageInfo(context.packageName, 0)
-                androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info).toInt()
-            } catch (_: Exception) { 0 }
-            Text(
-                text = "Version $appVerName (build $appVerCode)",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                textAlign = TextAlign.Center
-            )
+            val appVerName = try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
+            val appVerCode = try { val info = context.packageManager.getPackageInfo(context.packageName, 0); androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info).toInt() } catch (_: Exception) { 0 }
+            Text(text = "Version $appVerName (build $appVerCode)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), textAlign = TextAlign.Center)
         }
     }
 }
@@ -2951,7 +3055,7 @@ fun SettingsTab(
 fun InfoBox(title: String, desc: String, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(12.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
     ) {

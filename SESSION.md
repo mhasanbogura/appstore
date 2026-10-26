@@ -14,6 +14,21 @@
 
 ## All Changes Made
 
+### Build System (Windows machine setup)
+- Installed JDK 21 (Temurin) via winget — no JDK existed on the Windows machine
+- `settings.gradle.kts`: auto-detects SDK location per OS and fixes `local.properties`
+  `sdk.dir` (Linux box uses `~/android-sdk`, Windows uses `%LOCALAPPDATA%\Android\Sdk`)
+  — the folder is synced via Google Drive so the old hardcoded Linux path broke Windows builds
+- `fixKeystore` task in `app/build.gradle.kts`: validates `debug.keystore` (alias
+  `androiddebugkey`, password `android`) and regenerates it with the JDK's keytool if
+  missing/corrupt. Runs automatically via `preBuild` — builds self-heal
+  Warning: regeneration changes the signing key; old installs need a reinstall
+- Removed duplicate launcher icons: default template `ic_launcher*.webp` (tracked, May)
+  conflicted with the custom blue PNG icons (Sep 21) and failed `packageDebugResources`
+- Debug builds excluded publish tasks on Windows:
+  `gradlew :app:assembleDebug -x :app:publishToDrive -x :app:incrementVersion -x :app:releaseToGitHub`
+  (publishToDrive/releaseToGitHub target the Linux machine's paths and gh CLI)
+
 ### Admin Removed
 - Removed admin login/logout, admin edit/delete dialogs, AdminTab
 - Removed credentials sync, admin accounts, all admin-related code

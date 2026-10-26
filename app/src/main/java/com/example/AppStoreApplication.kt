@@ -4,12 +4,16 @@ import android.app.Application
 import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 class AppStoreApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        FirebaseApp.initializeApp(this)
+
         val imageClient = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -28,5 +32,9 @@ class AppStoreApplication : Application() {
                 .crossfade(true)
                 .build()
         )
+    }
+
+    companion object {
+        val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance() }
     }
 }

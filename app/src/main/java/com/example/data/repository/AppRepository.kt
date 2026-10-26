@@ -222,7 +222,15 @@ class AppRepository(
     suspend fun syncJsonManifestFromDrive(parentFolderId: String, apiKey: String): List<AppItem> = withContext(Dispatchers.IO) {
         if (apiKey.isEmpty() || parentFolderId.isEmpty()) return@withContext emptyList()
         try {
-            val query = "'$parentFolderId' in parents and name = 'store_manifest.json' and trashed = false"
+            // Manifest + its md/icon files live in the dedicated Web subfolder only
+            val webId = try {
+                driveService.listFiles(
+                    query = "'$parentFolderId' in parents and mimeType = 'application/vnd.google-apps.folder' and name = 'Web' and trashed = false",
+                    fields = "files(id)",
+                    apiKey = apiKey
+                ).files.firstOrNull()?.id
+            } catch (_: Exception) { null } ?: return@withContext emptyList()
+            val query = "'$webId' in parents and name = 'store_manifest.json' and trashed = false"
             val response = driveService.listFiles(query = query, fields = "files(id, name)", apiKey = apiKey)
             val manifestFile = response.files.firstOrNull() ?: return@withContext emptyList()
 
@@ -234,22 +242,87 @@ class AppRepository(
 
             val jsonStr = mediaResponse.body?.string() ?: return@withContext emptyList()
             val jsonArr = org.json.JSONArray(jsonStr)
+            // Resolve md/icon filenames inside the Web subfolder (for shared url/md/icon entries)
+            val siblingFiles = try {
+                driveService.listFiles(
+                    query = "'$webId' in parents and trashed = false",
+                    fields = "files(id, name, mimeType)",
+                    apiKey = apiKey
+                ).files
+            } catch (_: Exception) { emptyList() }
+            val siblingMd = mutableMapOf<String, String>()
+            siblingFiles
+                .filter { it.name.endsWith(".md", ignoreCase = true) }
+                .forEach { if (!siblingMd.containsKey(it.name.dropLast(3).trim())) siblingMd[it.name.dropLast(3).trim()] = it.id }
+            val siblingIcons = mutableMapOf<String, String>()
+            siblingFiles
+                .filter { (it.mimeType ?: "").startsWith("image/") }
+                .forEach { file ->
+                    val key = file.name.removeSuffix(".png").removeSuffix(".PNG").removeSuffix(".jpg").removeSuffix(".jpeg").removeSuffix(".webp").trim()
+                    if (!siblingIcons.containsKey(key)) siblingIcons[key] =
+                        "https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=$apiKey"
+                }
+            fun siblingKey(name: String): String {
+                var k = name.trim()
+                if (k.endsWith(".md", ignoreCase = true)) k = k.dropLast(3)
+                for (ext in listOf(".png", ".PNG", ".jpg", ".jpeg", ".webp")) {
+                    if (k.endsWith(ext)) { k = k.dropLast(ext.length); break }
+                }
+                return k.trim()
+            }
+            // Size accepts bytes number or human string like "52.4 MB" / "1.2 GB" / "500 KB"
+            fun parseManifestSize(obj: org.json.JSONObject): Long {
+                if (!obj.has("size")) return 0L
+                return when (val raw = obj.get("size")) {
+                    is Number -> raw.toLong()
+                    is String -> {
+                        val m = Regex("""([\d.]+)\s*([KMGT]?B)?""", RegexOption.IGNORE_CASE).find(raw.trim())
+                            ?: return 0L
+                        val num = m.groupValues[1].toDoubleOrNull() ?: 0.0
+                        val mult = when (m.groupValues[2].uppercase()) {
+                            "GB" -> 1024L * 1024L * 1024L
+                            "MB" -> 1024L * 1024L
+                            "KB" -> 1024L
+                            else -> 1L
+                        }
+                        (num * mult).toLong()
+                    }
+                    else -> 0L
+                }
+            }
             val apps = (0 until jsonArr.length()).mapNotNull { i ->
                 try {
                     val obj = jsonArr.getJSONObject(i)
+                    val pkgName = obj.optString("packageName", "").trim().ifBlank {
+                        "com.manifest." + obj.optString("name", "app").lowercase()
+                            .replace("[^a-z0-9]+".toRegex(), ".").trim('.')
+                            .ifBlank { "app" }
+                    }
+                    val appName = obj.optString("name", "").trim().ifBlank { pkgName }
+                    val mdKey = siblingKey(obj.optString("mdFileName", ""))
+                    val mdId = siblingMd[mdKey]
+                    val iconKey = siblingKey(obj.optString("iconFileName", ""))
+                    val iconUrl = obj.optString("iconUrl", "").ifBlank {
+                        siblingIcons[iconKey]
+                            ?: "https://cdn-icons-png.flaticon.com/512/888/888857.png"
+                    }
                     AppItem(
-                        packageName = obj.optString("packageName", ""),
-                        name = obj.optString("name", ""),
-                        versionName = obj.optString("versionName", "1.0"),
+                        id = "manifest_${System.currentTimeMillis()}_$i",
+                        packageName = pkgName,
+                        name = appName,
+                        versionName = obj.optString("versionName", "").trim().ifBlank { "1.0" },
                         versionCode = obj.optInt("versionCode", 1),
-                        size = obj.optLong("size", 5000000),
+                        size = parseManifestSize(obj),
                         driveFileId = "manifest_${System.currentTimeMillis()}_$i",
+                        fileName = obj.optString("fileName", ""),
                         downloadUrl = obj.optString("downloadUrl", ""),
-                        iconUrl = obj.optString("iconUrl", "https://cdn-icons-png.flaticon.com/512/888/888857.png"),
-                        description = obj.optString("description", ""),
+                        iconUrl = iconUrl,
+                        description = if (mdId != null) "__MD_ID:$mdId" else obj.optString("description", ""),
                         category = obj.optString("category", "Manifest"),
+                        // Manifest entries are Windows apps only
+                        platform = "Windows",
                         lastUpdated = System.currentTimeMillis()
-                    ).takeIf { it.packageName.isNotBlank() && it.name.isNotBlank() }
+                    ).takeIf { it.name.isNotBlank() }
                 } catch (_: Exception) { null }
             }
             if (apps.isNotEmpty()) {
@@ -355,15 +428,20 @@ class AppRepository(
             val buildMatch = buildPattern.find(stripped)
             val patchMatch = patchPattern.find(stripped)
 
+            // Windows ZIPs have no package prefix: accept a plain _vN.N version segment
+            val winVersionMatch = if (!isWindows) null
+                else if (versionMatch != null) null
+                else "_v(\\d[\\d.]*)".toRegex().find(stripped)
+
             // For Windows ZIP files, also try hyphen/underscore version suffix or v-prefixed version
             val zipVersionMatch = if (!isWindows) null
                 else if (versionMatch != null) null
                 else "[-_]([\\d.]+)$".toRegex().find(stripped)
             val vPrefixMatch = if (!isWindows) null
-                else if (versionMatch != null || zipVersionMatch != null) null
+                else if (versionMatch != null || winVersionMatch != null || zipVersionMatch != null) null
                 else "[- ]v([\\d.]+)$".toRegex(RegexOption.IGNORE_CASE).find(stripped)
             val dashSpaceVersion = if (!isWindows) null
-                else if (versionMatch != null || zipVersionMatch != null || vPrefixMatch != null) null
+                else if (versionMatch != null || winVersionMatch != null || zipVersionMatch != null || vPrefixMatch != null) null
                 else "[- ]([\\d.]+)$".toRegex().find(stripped)
 
             // For Windows ZIPs, extract embedded 3+ digit version code and build number
@@ -373,6 +451,7 @@ class AppRepository(
                 else "(?<=[a-zA-Z])(\\d{3,})".toRegex().find(stripped)
 
             val verName = versionMatch?.groupValues?.get(1)
+                ?: winVersionMatch?.groupValues?.get(1)
                 ?: zipVersionMatch?.groupValues?.get(1)
                 ?: vPrefixMatch?.groupValues?.get(1)
                 ?: dashSpaceVersion?.groupValues?.get(1)
@@ -380,6 +459,7 @@ class AppRepository(
                 ?: "1.0"
             val verCode = winBuildNum?.groupValues?.get(1)?.toIntOrNull()
                 ?: buildMatch?.groupValues?.get(1)?.toIntOrNull()
+                ?: winVersionMatch?.groupValues?.get(1)?.replace(".", "")?.toIntOrNull()
                 ?: winCodeNum?.groupValues?.get(1)?.toIntOrNull()
                 ?: versionMatch?.groupValues?.get(1)?.replace(".", "")?.toIntOrNull()
                 ?: zipVersionMatch?.groupValues?.get(1)?.replace(".", "")?.toIntOrNull()
@@ -390,6 +470,8 @@ class AppRepository(
 
             val beforeVersion = if (versionMatch != null) {
                 stripped.substring(0, versionMatch.range.first).trimEnd('_')
+            } else if (winVersionMatch != null) {
+                stripped.substring(0, winVersionMatch.range.first).trimEnd('_')
             } else if (zipVersionMatch != null) {
                 stripped.substring(0, zipVersionMatch.range.first).trimEnd('-', '_', ' ')
             } else if (vPrefixMatch != null) {
@@ -434,12 +516,14 @@ class AppRepository(
                 else "Discovered APK from Google Drive: ${file.name}."
 
             AppItem(
+                id = fileId,
                 packageName = pkgName,
                 name = appName,
                 versionName = verName,
                 versionCode = verCode,
                 size = file.size?.toLongOrNull() ?: 5000000,
                 driveFileId = fileId,
+                fileName = file.name,
                 downloadUrl = streamUrl,
                 iconUrl = iconUrl,
                 description = description,

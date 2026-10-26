@@ -61,6 +61,9 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     private val _autoUpdateCheck = MutableStateFlow(prefs.getBoolean("auto_update_check", true))
     val autoUpdateCheck = _autoUpdateCheck.asStateFlow()
 
+    private val _autoDownloadUpdates = MutableStateFlow(prefs.getBoolean("auto_download_updates", true))
+    val autoDownloadUpdates = _autoDownloadUpdates.asStateFlow()
+
     private val _autoDeleteDownloads = MutableStateFlow(prefs.getBoolean("auto_delete_downloads", true))
     val autoDeleteDownloads = _autoDeleteDownloads.asStateFlow()
 
@@ -139,6 +142,11 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         scheduleUpdateWork(enabled)
     }
 
+    fun setAutoDownloadUpdates(enabled: Boolean) {
+        prefs.edit().putBoolean("auto_download_updates", enabled).apply()
+        _autoDownloadUpdates.value = enabled
+    }
+
     fun getNotifHour(): Int = prefs.getInt("notif_hour", 8)
     fun getNotifMinute(): Int = prefs.getInt("notif_minute", 0)
     fun getNotifIntervalHours(): Int = prefs.getInt("notif_interval_hours", 24)
@@ -148,6 +156,13 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun setNotifTime(hour: Int, minute: Int) {
         prefs.edit().putInt("notif_hour", hour).putInt("notif_minute", minute).apply()
+        scheduleUpdateWork(_autoUpdateCheck.value)
+    }
+
+    // Check/retry interval in minutes (5, 10, 15, 30 min, 1..24 hours)
+    fun getCheckIntervalMinutes(): Int = com.example.util.AutoDownloadHelper.checkIntervalMinutes(prefs)
+    fun setCheckIntervalMinutes(minutes: Int) {
+        prefs.edit().putInt("check_interval_minutes", minutes.coerceAtLeast(5)).apply()
         scheduleUpdateWork(_autoUpdateCheck.value)
     }
 
@@ -166,7 +181,8 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         if (enabled) {
             val hour = getNotifHour()
             val minute = getNotifMinute()
-            val intervalHours = getNotifIntervalHours().toLong()
+            // WorkManager periodic minimum is 15 min; shorter intervals run via AlarmManager
+            val intervalMinutes = getCheckIntervalMinutes().coerceAtLeast(15).toLong()
 
             val now = java.util.Calendar.getInstance()
             val target = java.util.Calendar.getInstance().apply {
@@ -190,7 +206,7 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
             )
 
             val periodicRequest = androidx.work.PeriodicWorkRequestBuilder<com.example.util.UpdateCheckWorker>(
-                intervalHours, java.util.concurrent.TimeUnit.HOURS
+                intervalMinutes, java.util.concurrent.TimeUnit.MINUTES
             )
                 .setInitialDelay(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .addTag("update_check")
@@ -293,8 +309,11 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     val totalUsers = _totalUsers.asStateFlow()
 
     init {
-        if (!prefs.contains("auto_update_check")) {
-            prefs.edit().putBoolean("auto_update_check", true).apply()
+        // Background update check always runs (no toggle in settings)
+        prefs.edit().putBoolean("auto_update_check", true).apply()
+        _autoUpdateCheck.value = true
+        if (!prefs.contains("auto_download_updates")) {
+            prefs.edit().putBoolean("auto_download_updates", true).apply()
         }
         NotificationHelper.init(application)
         refreshInstalledPackages()
@@ -346,7 +365,16 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         lazyLoadDescription(app, onResult)
     }
 
+    private val updateHistoryDao = AppDatabase.getDatabase(application).updateHistoryDao
+
     fun markPackageUpdated(packageName: String, newVersionCode: Int, patchVersion: String = "") {
+        val oldVersionCode = _installedPackages.value[packageName] ?: 0
+        val oldVersionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        } catch (_: Exception) { "" }
+        val appName = allApps.value.firstOrNull { it.packageName == packageName }?.name ?: packageName
+        val newVersionName = allApps.value.firstOrNull { it.packageName == packageName }?.versionName ?: ""
+
         _installedPackages.update { it + (packageName to newVersionCode) }
         if (patchVersion.isNotEmpty()) {
             val prefs = getApplication<Application>().getSharedPreferences("drive_store_prefs", android.content.Context.MODE_PRIVATE)
@@ -356,6 +384,26 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
                 obj.put(packageName, patchVersion)
                 prefs.edit().putString("installed_patch_versions", obj.toString()).apply()
             } catch (_: Exception) { }
+        }
+
+        // Record update history to avoid re-updates
+        if (oldVersionCode > 0 && newVersionCode > oldVersionCode) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    updateHistoryDao.insertUpdate(
+                        com.example.data.local.UpdateHistory(
+                            packageName = packageName,
+                            appName = appName,
+                            oldVersionName = oldVersionName,
+                            oldVersionCode = oldVersionCode,
+                            newVersionName = newVersionName,
+                            newVersionCode = newVersionCode
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.e("StoreViewModel", "Record update history failed", e)
+                }
+            }
         }
     }
 
@@ -442,12 +490,14 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         val cachedVersionCode = prefs.getInt("self_update_version_code", 0)
         val existing = allApps.value.firstOrNull { it.packageName == "com.mahmuduls.appstore" }
         return AppItem(
+            id = existing?.driveFileId ?: "self_app_store",
             packageName = "com.mahmuduls.appstore",
             name = "App Store",
             versionName = cachedVersionName,
             versionCode = cachedVersionCode,
             size = existing?.size ?: 0L,
             driveFileId = existing?.driveFileId ?: "",
+            fileName = existing?.fileName ?: "",
             downloadUrl = existing?.downloadUrl ?: "",
             iconUrl = existing?.iconUrl ?: "",
             description = existing?.description ?: "",
@@ -505,7 +555,9 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
                 repository.syncSubfolderFromDrive(_driveFolderId.value, "Windows", k, "Windows").getOrNull()?.let { activeFileIds.addAll(it.map { a -> a.driveFileId }) }
 
                 for (folderId in _sharedFolderIds.value) {
-                    repository.syncFromDrive(folderId, k).getOrNull()?.let { activeFileIds.addAll(it.map { a -> a.driveFileId }) }
+                    // deleteStale=false here: the global cleanup below handles stale rows,
+                    // otherwise this would wipe other folders' + manifest apps mid-sync
+                    repository.syncFromDrive(folderId, k, deleteStale = false).getOrNull()?.let { activeFileIds.addAll(it.map { a -> a.driveFileId }) }
                 }
 
                 // Sync JSON manifest files from each folder
@@ -580,15 +632,19 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
 
         val downloadsDir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: getApplication<Application>().cacheDir
-        // Delete old downloaded files for this package (other versions)
+        // Original Drive filename (sanitized), fallback to legacy naming
+        val targetName = app.fileName.takeIf { it.isNotBlank() }?.replace("/", "_")?.trim()?.takeIf { it.isNotBlank() }
+            ?: "${app.packageName}_${app.versionCode}.apk"
+        val skipValidation = app.platform != "Android" || !targetName.endsWith(".apk", ignoreCase = true)
+        // Delete old downloaded files for this package (other versions, legacy naming)
         downloadsDir.listFiles()?.forEach { f ->
-            if (f.name.startsWith("${app.packageName}_") && f.name != "${app.packageName}_${app.versionCode}.apk" && (f.name.endsWith(".apk") || f.name.endsWith(".tmp"))) {
+            if (f.name.startsWith("${app.packageName}_") && f.name != targetName && (f.name.endsWith(".apk") || f.name.endsWith(".tmp"))) {
                 f.delete()
             }
         }
-        val existingFile = File(downloadsDir, "${app.packageName}_${app.versionCode}.apk")
+        val existingFile = File(downloadsDir, targetName)
         if (existingFile.exists()) {
-            if (isValidApk(existingFile)) {
+            if (skipValidation || isValidApk(existingFile)) {
                 _downloadStates.update { it + (app.packageName to DownloadState.Completed) }
                 saveDownloadTime(app.packageName)
                 trackInstalledPackage(app.packageName)
@@ -605,12 +661,17 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val tmpFile = File(downloadsDir, "${app.packageName}_${app.versionCode}.tmp")
+        val tmpFile = File(downloadsDir, "$targetName.tmp")
 
-        val downloadUrls = listOfNotNull(
-            "https://drive.google.com/uc?export=download&id=${app.driveFileId}",
-            app.downloadUrl
-        )
+        val downloadUrls = if (app.driveFileId.startsWith("manifest_")) {
+            // Manifest URL-apps: download straight via their downloadUrl
+            listOfNotNull(app.downloadUrl.takeIf { it.isNotBlank() })
+        } else {
+            listOfNotNull(
+                "https://drive.google.com/uc?export=download&id=${app.driveFileId}",
+                app.downloadUrl
+            )
+        }
 
         val job = viewModelScope.launch(Dispatchers.IO) {
             var lastError: Exception? = null
@@ -663,7 +724,7 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
 
                                 tmpFile.renameTo(existingFile)
 
-                        if (!isValidApk(existingFile)) {
+                        if (!skipValidation && !isValidApk(existingFile)) {
                             existingFile.delete()
                             throw Exception("Downloaded APK is corrupted")
                         }
@@ -676,18 +737,20 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
                         // Read actual version from APK manifest for accurate update tracking
                         var actualVersionCode: Int = app.versionCode
                         var actualVersionName: String = app.versionName
-                        try {
-                            val apkInfo = getApplication<Application>().packageManager.getPackageArchiveInfo(existingFile.absolutePath, 0)
-                            if (apkInfo != null) {
-                                actualVersionCode = androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(apkInfo).toInt()
-                                actualVersionName = apkInfo.versionName ?: app.versionName
-                            }
-                        } catch (_: Exception) { }
+                        if (!skipValidation) {
+                            try {
+                                val apkInfo = getApplication<Application>().packageManager.getPackageArchiveInfo(existingFile.absolutePath, 0)
+                                if (apkInfo != null) {
+                                    actualVersionCode = androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(apkInfo).toInt()
+                                    actualVersionName = apkInfo.versionName ?: app.versionName
+                                }
+                            } catch (_: Exception) { }
+                        }
 
                         NotificationHelper.showDownloadCompleteNotification(getApplication(), app.name, app.packageName, true)
                         trackInstalledPackage(app.packageName)
                         if (app.packageName == getApplication<Application>().packageName) {
-                            val selfApkFile = java.io.File(downloadsDir, "${app.packageName}_${app.versionCode}.apk")
+                            val selfApkFile = java.io.File(downloadsDir, targetName)
                             viewModelScope.launch {
                                 delay(600_000L)
                                 if (selfApkFile.exists()) selfApkFile.delete()
@@ -756,6 +819,8 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         activeDownloadJobs.remove(packageName)
         try {
             val app = getApplication<Application>()
+            val targetTmp = allApps.value.firstOrNull { it.packageName == packageName }
+                ?.fileName?.takeIf { it.isNotBlank() }?.let { "$it.tmp" }
             val dirs = listOfNotNull(
                 app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
                 app.cacheDir,
@@ -764,6 +829,9 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
             for (dir in dirs) {
                 dir.listFiles()?.forEach { file ->
                     if (file.name.startsWith("${packageName}_") && file.name.endsWith(".tmp")) {
+                        file.delete()
+                    }
+                    if (targetTmp != null && file.name == targetTmp) {
                         file.delete()
                     }
                 }

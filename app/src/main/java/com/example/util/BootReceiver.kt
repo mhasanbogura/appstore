@@ -11,11 +11,11 @@ class BootReceiver : BroadcastReceiver() {
         if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
 
         val prefs = context.getSharedPreferences("drive_store_prefs", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("auto_update_check", false)) return
+        if (!prefs.getBoolean("auto_update_check", true)) return
 
         val hour = prefs.getInt("notif_hour", 8)
         val minute = prefs.getInt("notif_minute", 0)
-        val intervalHours = prefs.getInt("notif_interval_hours", 24)
+        val intervalMinutes = com.example.util.AutoDownloadHelper.checkIntervalMinutes(prefs).coerceAtLeast(5)
 
         val alarmIntent = PendingIntent.getBroadcast(
             context, 0,
@@ -39,7 +39,7 @@ class BootReceiver : BroadcastReceiver() {
         } catch (_: SecurityException) {
             alarmMgr.setInexactRepeating(
                 AlarmManager.RTC_WAKEUP, cal.timeInMillis,
-                intervalHours * 3600000L, alarmIntent
+                intervalMinutes * 60000L, alarmIntent
             )
         }
     }

@@ -5,12 +5,14 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "apps")
 data class AppItem(
-    @PrimaryKey val packageName: String,
+    @PrimaryKey val id: String,
+    val packageName: String,
     val name: String,
     val versionName: String,
     val versionCode: Int,
     val size: Long,
     val driveFileId: String,
+    val fileName: String = "",
     val downloadUrl: String,
     val iconUrl: String,
     val description: String,

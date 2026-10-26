@@ -9,15 +9,15 @@ import retrofit2.http.Query
 
 @JsonClass(generateAdapter = true)
 data class DriveFile(
-    val id: String,
-    val name: String,
-    val mimeType: String,
-    val size: String?,
-    val createdTime: String?,
-    val modifiedTime: String?,
-    val webContentLink: String?,
-    val iconLink: String?,
-    val thumbnailLink: String?
+    val id: String = "",
+    val name: String = "",
+    val mimeType: String = "",
+    val size: String? = null,
+    val createdTime: String? = null,
+    val modifiedTime: String? = null,
+    val webContentLink: String? = null,
+    val iconLink: String? = null,
+    val thumbnailLink: String? = null
 )
 
 @JsonClass(generateAdapter = true)

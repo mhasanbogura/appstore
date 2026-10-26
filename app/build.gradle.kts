@@ -1,9 +1,13 @@
+import java.io.File
+import java.security.KeyStore
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
+  alias(libs.plugins.google.services)
 }
 
 android {
@@ -51,6 +55,85 @@ android {
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
+// ---------------------------------------------------------------------------
+// Keystore self-heal: `gradlew fixKeystore`
+// The debug keystore lives in the project root and is synced between machines
+// (e.g. via Google Drive), so it can go missing or get corrupted. This task
+// validates it and regenerates it automatically when unreadable, so builds
+// never fail with "keystore not found" / "failed to load keystore".
+// It runs automatically before every build (preBuild depends on it).
+// NOTE: regenerating changes the signing key - apps installed with the old
+// key can no longer be updated in place (reinstall instead).
+// ---------------------------------------------------------------------------
+val debugKeystoreFile = rootProject.file("debug.keystore")
+val debugStorePassword = "android"
+val debugKeyAlias = "androiddebugkey"
+
+fun isKeystoreValid(file: File, storePassword: String, alias: String): Boolean {
+    if (!file.isFile || file.length() == 0L) return false
+    for (type in listOf("PKCS12", "JKS")) {
+        try {
+            val ks = KeyStore.getInstance(type)
+            file.inputStream().use { ks.load(it, storePassword.toCharArray()) }
+            if (ks.containsAlias(alias) && ks.isKeyEntry(alias)) return true
+        } catch (_: Exception) {
+            // wrong format or corrupted - try the next type
+        }
+    }
+    return false
+}
+
+tasks.register("fixKeystore") {
+    group = "build"
+    description = "Validates debug.keystore and regenerates it if it is missing or corrupted."
+    notCompatibleWithConfigurationCache("Runs keytool as an external process with ad-hoc lookup")
+    doLast {
+        if (isKeystoreValid(debugKeystoreFile, debugStorePassword, debugKeyAlias)) {
+            logger.lifecycle("Keystore OK: ${debugKeystoreFile.name}")
+            return@doLast
+        }
+        logger.warn("Keystore missing or corrupted: ${debugKeystoreFile.absolutePath}")
+        logger.warn("Regenerating it (apps signed with the old key will need a reinstall)...")
+
+        // Use the keytool that ships with the JDK running Gradle (may not be on PATH).
+        val javaHome = System.getProperty("java.home")
+        val keytool = listOf(
+            "$javaHome/bin/keytool.exe",
+            "$javaHome/bin/keytool",
+            "$javaHome/../bin/keytool.exe",
+            "$javaHome/../bin/keytool",
+        ).map { File(it) }.firstOrNull { it.isFile }
+            ?: throw GradleException(
+                "keytool not found near $javaHome. " +
+                    "Install a JDK (not just a JRE) and make sure Gradle runs on it."
+            )
+
+        debugKeystoreFile.parentFile?.mkdirs()
+        val proc = ProcessBuilder(
+            keytool.absolutePath, "-genkeypair",
+            "-keystore", debugKeystoreFile.absolutePath,
+            "-storetype", "PKCS12",
+            "-alias", debugKeyAlias,
+            "-keyalg", "RSA", "-keysize", "2048",
+            "-validity", "10000",
+            "-storepass", debugStorePassword,
+            "-keypass", debugStorePassword,
+            "-dname", "CN=Android Debug,O=Android,C=US",
+            "-noprompt",
+        ).redirectErrorStream(true).start()
+        val output = proc.inputStream.bufferedReader().readText()
+        if (proc.waitFor() != 0 || !isKeystoreValid(debugKeystoreFile, debugStorePassword, debugKeyAlias)) {
+            throw GradleException("Failed to regenerate ${debugKeystoreFile.name}:\n$output")
+        }
+        logger.lifecycle("Regenerated ${debugKeystoreFile.name} (alias '$debugKeyAlias', valid 10000 days)")
+    }
+}
+
+// Every build self-heals the keystore before compiling/signing.
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn("fixKeystore")
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
@@ -64,6 +147,10 @@ dependencies {
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
+  implementation(libs.firebase.auth)
+  implementation(libs.play.services.auth)
+  implementation(libs.credentials)
+  implementation(libs.credentials.googleid)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
   // implementation(libs.androidx.camera.core)
@@ -89,6 +176,7 @@ dependencies {
   // implementation(libs.firebase.ai)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
+  implementation(libs.kotlinx.coroutines.play.services)
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
@@ -131,7 +219,12 @@ fun getVersionName(): String {
 tasks.register("publishToDrive") {
     doLast {
         val variantDir = file("build/outputs/apk/debug")
-        val driveDir = file("/home/mhasanbogura/Google Drive/mahmudulhasandhk70/Apk Store")
+        // Resolve the Drive folder per machine (project folder is synced between
+        // Linux and Windows), instead of hardcoding one OS's path.
+        val driveDir = listOf(
+            File("/home/mhasanbogura/Google Drive/mahmudulhasandhk70/App Store"),
+            File("C:/Google Drive/mahmudulhasandhk70/App Store"),
+        ).firstOrNull { it.isDirectory } ?: File("/home/mhasanbogura/Google Drive/mahmudulhasandhk70/App Store")
         if (!driveDir.exists()) driveDir.mkdirs()
         val verFile = project.rootProject.file("version.properties")
         val verName = verFile.useLines { lines ->
@@ -157,8 +250,61 @@ tasks.register("publishToDrive") {
     }
 }
 
-tasks.register("incrementVersion") {
+tasks.register("releaseToGitHub") {
     dependsOn("publishToDrive")
+    doLast {
+        val verFile = project.rootProject.file("version.properties")
+        val verName = verFile.useLines { lines ->
+            lines.firstOrNull { it.startsWith("versionName=") }
+                ?.substringAfter("=")?.trim() ?: "1.0.0"
+        }
+        val verCode = verFile.useLines { lines ->
+            lines.firstOrNull { it.startsWith("versionCode=") }
+                ?.substringAfter("=")?.trim() ?: "1"
+        }
+        val srcApk = file("build/outputs/apk/debug/app-debug.apk")
+        val tagName = "v$verName"
+        val releaseName = "Release v$verName - Build $verCode"
+
+        if (!srcApk.exists()) {
+            logger.error("APK not found: ${srcApk.absolutePath}")
+            return@doLast
+        }
+
+        // Copy APK to AppStore.apk
+        val releaseApk = file("build/outputs/apk/debug/AppStore.apk")
+        srcApk.copyTo(releaseApk, overwrite = true)
+
+        // Delete existing tag/release if any
+        ProcessBuilder("gh", "release", "delete", tagName, "--yes", "--cleanup-tag")
+            .directory(project.rootDir)
+            .redirectErrorStream(true)
+            .start().waitFor()
+
+        // Create release with APK
+        val pb = ProcessBuilder(
+            "gh", "release", "create", tagName,
+            "--title", releaseName,
+            "--generate-notes",
+            releaseApk.absolutePath
+        )
+        pb.directory(project.rootDir)
+        pb.redirectErrorStream(true)
+        val proc = pb.start()
+        val output = proc.inputStream.bufferedReader().readText()
+        val exitCode = proc.waitFor()
+
+        if (exitCode == 0) {
+            logger.lifecycle("GitHub release published: $tagName")
+            logger.lifecycle(output.trim())
+        } else {
+            logger.error("GitHub release failed (exit $exitCode): $output")
+        }
+    }
+}
+
+tasks.register("incrementVersion") {
+    dependsOn("publishToDrive", "releaseToGitHub")
     val verFile = project.rootProject.file("version.properties")
     doLast {
         val lines = verFile.readText().lines().toMutableList()

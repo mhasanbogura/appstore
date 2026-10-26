@@ -19,7 +19,7 @@ class UpdateCheckReceiver : BroadcastReceiver() {
         val prefs = context.getSharedPreferences("drive_store_prefs", Context.MODE_PRIVATE)
         val appPrefs = context.getSharedPreferences("app_store_prefs", Context.MODE_PRIVATE)
 
-        if (!prefs.getBoolean("auto_update_check", false)) return
+        if (!prefs.getBoolean("auto_update_check", true)) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
         }
@@ -41,7 +41,7 @@ class UpdateCheckReceiver : BroadcastReceiver() {
 
                 val apps = repository.allApps.first()
                 prefs.edit().putString("cached_apps_list", apps.joinToString("|||") { app ->
-                    "${app.packageName}||${app.name}||${app.versionName}||${app.versionCode}||${app.driveModifiedTime}||${app.patchVersion}"
+                    "${app.packageName}||${app.name}||${app.versionName}||${app.versionCode}||${app.driveModifiedTime}||${app.patchVersion}||${app.driveFileId}||${app.downloadUrl}||${app.fileName}"
                 }).apply()
                 checkAndNotify(context, prefs, apps)
             } catch (_: Exception) {
@@ -50,7 +50,7 @@ class UpdateCheckReceiver : BroadcastReceiver() {
                     val apps = appsJson.split("|||").mapNotNull { entry ->
                         val parts = entry.split("||")
                         if (parts.size < 6) return@mapNotNull null
-                        CachedApp(parts[0], parts[1], parts[2], parts[3].toIntOrNull() ?: return@mapNotNull null, parts[4].toLongOrNull() ?: 0L, parts[5])
+                        CachedApp(parts[0], parts[1], parts[2], parts[3].toIntOrNull() ?: return@mapNotNull null, parts[4].toLongOrNull() ?: 0L, parts[5], parts.getOrElse(6) { "" }, parts.getOrElse(7) { "" }, parts.getOrElse(8) { "" })
                     }
                     checkAndNotify(context, prefs, apps)
                 }
@@ -60,21 +60,22 @@ class UpdateCheckReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun checkAndNotify(context: Context, prefs: android.content.SharedPreferences, apps: List<*>) {
+    private fun checkAndNotify(context: Context, prefs: android.content.SharedPreferences, apps: List<*>): Boolean {
         val installed = try {
             context.packageManager.getInstalledPackages(0).associate {
                 it.packageName to PackageInfoCompat.getLongVersionCode(it).toInt()
             }
-        } catch (_: Exception) { return }
-        if (installed.isEmpty()) return
+        } catch (_: Exception) { return false }
+        if (installed.isEmpty()) return false
 
         val selfPkg = "com.mahmuduls.appstore"
         val notifiedSet = mutableSetOf<String>()
+        var hadFailures = false
 
         for (item in apps) {
             val app = if (item is CachedApp) item else {
                 val a = item as? com.example.data.local.AppItem ?: continue
-                CachedApp(a.packageName, a.name, a.versionName, a.versionCode, a.driveModifiedTime, a.patchVersion)
+                CachedApp(a.packageName, a.name, a.versionName, a.versionCode, a.driveModifiedTime, a.patchVersion, a.driveFileId, a.downloadUrl, a.fileName)
             }
             if (!installed.containsKey(app.packageName)) continue
             try {
@@ -92,6 +93,22 @@ class UpdateCheckReceiver : BroadcastReceiver() {
                     )
                 ) {
                     if (notifiedSet.add("bg_${app.packageName}") && app.driveModifiedTime > lastNotified) {
+                        val autoDownload = prefs.getBoolean("auto_download_updates", true)
+                        if (autoDownload) {
+                            val file = AutoDownloadHelper.downloadApk(
+                                context, app.driveFileId, app.downloadUrl,
+                                app.packageName, app.versionCode
+                            )
+                            if (file != null) {
+                                NotificationHelper.showReadyToInstallNotification(
+                                    context, app.name, app.versionName,
+                                    app.packageName, file.absolutePath
+                                )
+                                prefs.edit().putLong("last_notified_${app.packageName}", app.driveModifiedTime).apply()
+                                continue
+                            }
+                            hadFailures = true
+                        }
                         NotificationHelper.showUpdateNotification(context, app.name, app.versionName, app.packageName)
                         prefs.edit().putLong("last_notified_${app.packageName}", app.driveModifiedTime).apply()
                     }
@@ -107,20 +124,30 @@ class UpdateCheckReceiver : BroadcastReceiver() {
             }
         }
 
-        val intervalHours = prefs.getInt("notif_interval_hours", 24)
-        val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.HOUR_OF_DAY, intervalHours) }
+        val intervalMinutes = AutoDownloadHelper.checkIntervalMinutes(prefs).coerceAtLeast(5)
+        val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, intervalMinutes) }
         val alarmMgr = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
         val alarmIntent = android.app.PendingIntent.getBroadcast(context, 0, Intent(context, UpdateCheckReceiver::class.java), android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
         try {
             alarmMgr.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, cal.timeInMillis, alarmIntent)
         } catch (_: SecurityException) {
-            alarmMgr.setInexactRepeating(android.app.AlarmManager.RTC_WAKEUP, cal.timeInMillis, intervalHours * 3600000L, alarmIntent)
+            alarmMgr.setInexactRepeating(android.app.AlarmManager.RTC_WAKEUP, cal.timeInMillis, intervalMinutes * 60000L, alarmIntent)
         }
+
+        if (hadFailures && prefs.getBoolean("auto_download_updates", true)) {
+            // Retry failed downloads after the check interval in background
+            val retryIntent = android.app.PendingIntent.getBroadcast(context, 999, Intent(context, UpdateCheckReceiver::class.java), android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+            try {
+                alarmMgr.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + intervalMinutes * 60000L, retryIntent)
+            } catch (_: Exception) { }
+        }
+        return hadFailures
     }
 
     private data class CachedApp(
         val packageName: String, val name: String, val versionName: String,
-        val versionCode: Int, val driveModifiedTime: Long, val patchVersion: String
+        val versionCode: Int, val driveModifiedTime: Long, val patchVersion: String,
+        val driveFileId: String = "", val downloadUrl: String = "", val fileName: String = ""
     )
 
     private fun getInstalledPatchVersion(context: Context, packageName: String): String {
