@@ -14,6 +14,18 @@
 
 ## All Changes Made
 
+### Login + Update Config (v1.10.27)
+- Google login now shows Google's REAL consent screen: added
+  `requestServerAuthCode(default_web_client_id, true)` (forceConsent) — same setup
+  as Meter Manager. Removed the fake `GoogleConsentDialog` from all auth screens
+- Update.md fix: sync only looked for Update.md inside the synced folder, but the
+  Android/Windows shared folders are SUBFOLDERS of the main Drive folder where
+  Update.md lives → config was never applied. Sync now falls back to the parent
+  folder's Update.md
+- Update.md data: uncommented entries, fixed Poweramp package
+  (app.maxmpz.audioplayer → com.maxmpz.audioplayer), copied Update.md into
+  Android\ so already-released apps apply it on next sync
+
 ### Build System (Windows machine setup)
 - Installed JDK 21 (Temurin) via winget — no JDK existed on the Windows machine
 - `settings.gradle.kts`: auto-detects SDK location per OS and fixes `local.properties`

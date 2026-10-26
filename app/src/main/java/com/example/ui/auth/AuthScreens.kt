@@ -27,7 +27,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -39,70 +38,16 @@ import com.google.android.gms.common.api.ApiException
 private val iconShape = RoundedCornerShape(24.dp)
 
 private fun buildGoogleSignInClient(context: android.content.Context): GoogleSignInClient {
+    // requestServerAuthCode(..., true) forces Google to show its OWN consent screen
+    // ("You're signing in to App Store" + privacy policy / ToS) after the account is
+    // chosen, instead of silently accepting a previously granted scope. The auth code
+    // itself is unused - we only need the consent step. Same setup as Meter Manager.
     val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
         .requestIdToken(context.getString(R.string.default_web_client_id))
+        .requestServerAuthCode(context.getString(R.string.default_web_client_id), true)
         .requestEmail()
         .build()
     return GoogleSignIn.getClient(context, gso)
-}
-
-@Composable
-fun GoogleConsentDialog(
-    accountEmail: String,
-    accountName: String,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Image(
-                painter = painterResource(R.drawable.ic_google),
-                contentDescription = "Google",
-                modifier = Modifier.size(24.dp)
-            )
-        },
-        title = {
-            Text(
-                "Sign in with Google",
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Start,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        text = {
-            Column {
-                Text(
-                    "You're signing in to App Store",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(accountEmail, fontSize = 14.sp)
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    "Review App Store's privacy policy and Terms of Service to understand how App Store will process and protect your data.",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 18.sp
-                )
-            }
-        },
-        confirmButton = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = onConfirm) { Text("Continue") }
-            }
-        }
-    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -116,9 +61,6 @@ fun AuthWelcomeScreen(
     BackHandler { onBack() }
     val context = LocalContext.current
     var googleError by remember { mutableStateOf<String?>(null) }
-    var pendingGoogleToken by remember { mutableStateOf<String?>(null) }
-    var pendingGoogleEmail by remember { mutableStateOf("") }
-    var pendingGoogleName by remember { mutableStateOf("") }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -129,9 +71,9 @@ fun AuthWelcomeScreen(
                 val account = task.getResult(ApiException::class.java)
                 val idToken = account?.idToken
                 if (idToken != null) {
-                    pendingGoogleToken = idToken
-                    pendingGoogleEmail = account.email ?: ""
-                    pendingGoogleName = account.displayName ?: ""
+                    // Google's own consent screen already appeared during sign-in
+                    // (forceConsent in buildGoogleSignInClient) - log in directly.
+                    onGoogleLoginClick(idToken)
                 } else {
                     googleError = "No ID token received"
                 }
@@ -145,18 +87,6 @@ fun AuthWelcomeScreen(
                 googleError = msg
             }
         }
-    }
-
-    if (pendingGoogleToken != null) {
-        GoogleConsentDialog(
-            accountEmail = pendingGoogleEmail,
-            accountName = pendingGoogleName,
-            onConfirm = {
-                onGoogleLoginClick(pendingGoogleToken!!)
-                pendingGoogleToken = null
-            },
-            onDismiss = { pendingGoogleToken = null }
-        )
     }
 
     Column(
@@ -247,8 +177,6 @@ fun AuthLoginScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var googleError by remember { mutableStateOf<String?>(null) }
-    var pendingGoogleToken by remember { mutableStateOf<String?>(null) }
-    var pendingGoogleEmail by remember { mutableStateOf("") }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -259,8 +187,9 @@ fun AuthLoginScreen(
                 val account = task.getResult(ApiException::class.java)
                 val idToken = account?.idToken
                 if (idToken != null) {
-                    pendingGoogleToken = idToken
-                    pendingGoogleEmail = account.email ?: ""
+                    // Google's own consent screen already appeared during sign-in
+                    // (forceConsent in buildGoogleSignInClient) - log in directly.
+                    onGoogleLoginClick(idToken)
                 } else {
                     googleError = "No ID token received"
                 }
@@ -274,18 +203,6 @@ fun AuthLoginScreen(
                 googleError = msg
             }
         }
-    }
-
-    if (pendingGoogleToken != null) {
-        GoogleConsentDialog(
-            accountEmail = pendingGoogleEmail,
-            accountName = "",
-            onConfirm = {
-                onGoogleLoginClick(pendingGoogleToken!!)
-                pendingGoogleToken = null
-            },
-            onDismiss = { pendingGoogleToken = null }
-        )
     }
 
     Column(
@@ -356,8 +273,6 @@ fun AuthRegisterScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var googleError by remember { mutableStateOf<String?>(null) }
-    var pendingGoogleToken by remember { mutableStateOf<String?>(null) }
-    var pendingGoogleEmail by remember { mutableStateOf("") }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -368,8 +283,9 @@ fun AuthRegisterScreen(
                 val account = task.getResult(ApiException::class.java)
                 val idToken = account?.idToken
                 if (idToken != null) {
-                    pendingGoogleToken = idToken
-                    pendingGoogleEmail = account.email ?: ""
+                    // Google's own consent screen already appeared during sign-in
+                    // (forceConsent in buildGoogleSignInClient) - log in directly.
+                    onGoogleLoginClick(idToken)
                 } else {
                     googleError = "No ID token received"
                 }
@@ -383,18 +299,6 @@ fun AuthRegisterScreen(
                 googleError = msg
             }
         }
-    }
-
-    if (pendingGoogleToken != null) {
-        GoogleConsentDialog(
-            accountEmail = pendingGoogleEmail,
-            accountName = "",
-            onConfirm = {
-                onGoogleLoginClick(pendingGoogleToken!!)
-                pendingGoogleToken = null
-            },
-            onDismiss = { pendingGoogleToken = null }
-        )
     }
 
     Column(

@@ -96,6 +96,36 @@ class AppRepository(
         } catch (_: Exception) { null }
     }
 
+    // Look for Update.md in the PARENT of the given folder. The shared folders
+    // ("Android", "Windows", ...) are subfolders of the main Drive folder where
+    // Update.md lives, so without this the per-app update config was never seen
+    // for shared-folder syncs.
+    private suspend fun findParentUpdateConfig(folderId: String, apiKey: String): com.example.data.remote.DriveFile? = withContext(Dispatchers.IO) {
+        try {
+            val client = OkHttpClient()
+            val metaUrl = "https://www.googleapis.com/drive/v3/files/$folderId?fields=parents&key=$apiKey"
+            val metaResponse = client.newCall(okhttp3.Request.Builder().url(metaUrl).build()).execute()
+            if (!metaResponse.isSuccessful) return@withContext null
+            val parents = org.json.JSONObject(metaResponse.body?.string() ?: return@withContext null)
+                .optJSONArray("parents") ?: return@withContext null
+            if (parents.length() == 0) return@withContext null
+            val parent = parents.getString(0)
+            val query = "'$parent' in parents and name='Update.md' and trashed=false"
+            val listUrl = "https://www.googleapis.com/drive/v3/files?q=${java.net.URLEncoder.encode(query, "UTF-8")}&key=$apiKey&fields=files(id,name,mimeType)"
+            val listResponse = client.newCall(okhttp3.Request.Builder().url(listUrl).build()).execute()
+            if (!listResponse.isSuccessful) return@withContext null
+            val files = org.json.JSONObject(listResponse.body?.string() ?: return@withContext null)
+                .optJSONArray("files") ?: return@withContext null
+            if (files.length() == 0) return@withContext null
+            val obj = files.getJSONObject(0)
+            com.example.data.remote.DriveFile(
+                id = obj.getString("id"),
+                name = obj.optString("name", "Update.md"),
+                mimeType = obj.optString("mimeType", "text/markdown")
+            )
+        } catch (_: Exception) { null }
+    }
+
     suspend fun insertCustomApp(app: AppItem) = withContext(Dispatchers.IO) {
         appDao.insertApps(listOf(app))
     }
@@ -367,13 +397,15 @@ class AppRepository(
             baseKey to mdFile.id
         }.toMap()
 
-        // Parse per-app update config from Update.md
+        // Parse per-app update config from Update.md (in this folder, or - for the
+        // "Android"/"Windows" shared subfolders - in the parent Drive folder)
         // Supported formats:
         //   "AppName_com.package.name"          → updates OFF (listed = off)
         //   "com.package.name = off"            → updates OFF
         //   "com.package.name = on"             → updates ON
         // Apps not listed default to "on"
         val configFile = allFiles.find { it.name.equals("Update.md", ignoreCase = true) }
+            ?: findParentUpdateConfig(folderId, apiKey)
         val updateDisabledPackages = if (configFile != null) {
             val configContent = fetchMdContent(configFile.id, apiKey)
             if (!configContent.isNullOrBlank()) {
