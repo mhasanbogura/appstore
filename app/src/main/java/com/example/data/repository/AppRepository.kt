@@ -70,13 +70,29 @@ class AppRepository(
     }
 
     suspend fun fetchMdContent(mdFileId: String, apiKey: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val url = "https://www.googleapis.com/drive/v3/files/$mdFileId?alt=media&key=$apiKey"
-            val client = OkHttpClient()
-            val request = okhttp3.Request.Builder().url(url).build()
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) response.body?.string()?.trim() else null
-        } catch (_: Exception) { null }
+        // Retry up to 3x: a single transient failure here silently disabled the whole
+        // Update.md config (empty config → all updates stay ON)
+        var lastError: String? = null
+        repeat(3) { attempt ->
+            try {
+                val url = "https://www.googleapis.com/drive/v3/files/$mdFileId?alt=media&key=$apiKey"
+                val client = OkHttpClient()
+                val request = okhttp3.Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string()?.trim()
+                    if (!body.isNullOrEmpty()) return@withContext body
+                    lastError = "empty body"
+                } else {
+                    lastError = "HTTP ${response.code}"
+                }
+            } catch (e: Exception) {
+                lastError = e.toString()
+            }
+            if (attempt < 2) kotlinx.coroutines.delay(700L)
+        }
+        Log.w("UpdateConfig", "fetchMdContent FAILED for $mdFileId after 3 tries: $lastError")
+        null
     }
 
     suspend fun fetchMdByName(folderId: String, fileName: String, apiKey: String): String? = withContext(Dispatchers.IO) {
@@ -105,7 +121,10 @@ class AppRepository(
             val client = OkHttpClient()
             val metaUrl = "https://www.googleapis.com/drive/v3/files/$folderId?fields=parents&key=$apiKey"
             val metaResponse = client.newCall(okhttp3.Request.Builder().url(metaUrl).build()).execute()
-            if (!metaResponse.isSuccessful) return@withContext null
+            if (!metaResponse.isSuccessful) {
+                Log.w("UpdateConfig", "findParentUpdateConfig: parent lookup HTTP ${metaResponse.code} for folder $folderId")
+                return@withContext null
+            }
             val parents = org.json.JSONObject(metaResponse.body?.string() ?: return@withContext null)
                 .optJSONArray("parents") ?: return@withContext null
             if (parents.length() == 0) return@withContext null
@@ -113,17 +132,27 @@ class AppRepository(
             val query = "'$parent' in parents and name='Update.md' and trashed=false"
             val listUrl = "https://www.googleapis.com/drive/v3/files?q=${java.net.URLEncoder.encode(query, "UTF-8")}&key=$apiKey&fields=files(id,name,mimeType)"
             val listResponse = client.newCall(okhttp3.Request.Builder().url(listUrl).build()).execute()
-            if (!listResponse.isSuccessful) return@withContext null
+            if (!listResponse.isSuccessful) {
+                Log.w("UpdateConfig", "findParentUpdateConfig: list HTTP ${listResponse.code} for parent $parent")
+                return@withContext null
+            }
             val files = org.json.JSONObject(listResponse.body?.string() ?: return@withContext null)
                 .optJSONArray("files") ?: return@withContext null
-            if (files.length() == 0) return@withContext null
+            if (files.length() == 0) {
+                Log.d("UpdateConfig", "findParentUpdateConfig: no Update.md in parent $parent of folder $folderId")
+                return@withContext null
+            }
             val obj = files.getJSONObject(0)
+            Log.d("UpdateConfig", "findParentUpdateConfig: found Update.md id=${obj.getString("id")} in parent $parent")
             com.example.data.remote.DriveFile(
                 id = obj.getString("id"),
                 name = obj.optString("name", "Update.md"),
                 mimeType = obj.optString("mimeType", "text/markdown")
             )
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            Log.w("UpdateConfig", "findParentUpdateConfig failed for folder $folderId: $e")
+            null
+        }
     }
 
     suspend fun insertCustomApp(app: AppItem) = withContext(Dispatchers.IO) {
@@ -397,15 +426,18 @@ class AppRepository(
             baseKey to mdFile.id
         }.toMap()
 
-        // Parse per-app update config from Update.md (in this folder, or - for the
-        // "Android"/"Windows" shared subfolders - in the parent Drive folder)
+        // Parse per-app update config from Update.md. The file lives ONLY in the root
+        // Drive folder; subfolder syncs ("Android", ...) find it via the parent lookup.
+        // Only Android syncs honor it - Windows/Web apps are unaffected.
         // Supported formats:
         //   "AppName_com.package.name"          → updates OFF (listed = off)
         //   "com.package.name = off"            → updates OFF
         //   "com.package.name = on"             → updates ON
         // Apps not listed default to "on"
-        val configFile = allFiles.find { it.name.equals("Update.md", ignoreCase = true) }
-            ?: findParentUpdateConfig(folderId, apiKey)
+        val configFile = if (platform != "Android") null else
+            allFiles.find { it.name.equals("Update.md", ignoreCase = true) }
+                ?: findParentUpdateConfig(folderId, apiKey)
+        Log.d("UpdateConfig", "syncDriveFolder folder=$folderId platform=$platform files=${allFiles.size} apks=${appFiles.size} configFile=${configFile?.id ?: "NONE"}")
         val updateDisabledPackages = if (configFile != null) {
             val configContent = fetchMdContent(configFile.id, apiKey)
             if (!configContent.isNullOrBlank()) {
@@ -430,9 +462,16 @@ class AppRepository(
                             }
                         }
                     }
+                Log.d("UpdateConfig", "Update.md (${configFile.id}) contentLen=${configContent.length} disabledPackages=$listedPackages")
                 listedPackages.toSet()
-            } else emptySet()
-        } else emptySet()
+            } else {
+                Log.w("UpdateConfig", "Update.md found (${configFile.id}) but content EMPTY/unreadable - updates stay ON")
+                emptySet()
+            }
+        } else {
+            if (platform == "Android") Log.w("UpdateConfig", "Update.md NOT found in folder $folderId nor its parent - updates stay ON")
+            emptySet()
+        }
 
         fun parseIso8601(iso: String?): Long {
             if (iso.isNullOrBlank()) return 0L
@@ -567,6 +606,7 @@ class AppRepository(
                 platform = platform
             )
         }
+        Log.d("UpdateConfig", "parsed ${parsedApps.size} apps; updateCheck=false for ${parsedApps.filter { !it.updateCheck }.map { it.packageName }}")
         if (insertIntoDb) {
             // Deduplicate by packageName - keep the entry with better data
             val dedupedApps = parsedApps.groupBy { it.packageName }.map { (_, apps) ->

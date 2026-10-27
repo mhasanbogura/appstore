@@ -14,6 +14,20 @@
 
 ## All Changes Made
 
+### Update Config — root-only, Android-only (v1.10.28)
+- `Update.md` now lives ONLY in the root Drive folder (deleted the `Android\Update.md`
+  copy). Android subfolder syncs find it via the parent-folder lookup
+- `syncDriveFolder` skips Update.md entirely when `platform != "Android"` —
+  Windows/Web syncs ignore the config (verified: Windows folder logs `configFile=NONE`)
+- `fetchMdContent` retries up to 3× with 700ms backoff — a single transient Drive
+  failure no longer silently disables the whole config (was: any failure → empty
+  config → all updates stayed ON)
+- Added diagnostic logging under tag `UpdateConfig`: folder ID, platform, whether
+  Update.md was found (direct vs parent), content length, parsed disabled packages,
+  and the final `updateCheck=false` apps
+- Verified on emulator (BlueStacks): Manage Apps shows "0 updates available — All
+  applications are up to date" after Nova Launcher + Poweramp are listed in Update.md
+
 ### Login + Update Config (v1.10.27)
 - Google login now shows Google's REAL consent screen: added
   `requestServerAuthCode(default_web_client_id, true)` (forceConsent) — same setup
