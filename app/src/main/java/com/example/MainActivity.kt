@@ -2023,6 +2023,28 @@ private fun unescapeMarkdown(text: String): String {
 
 private fun AnnotatedString.Builder.appendTextWithUrls(text: String) {
     val urlPattern = "https?://[\\w\\d\\-._~:/?#\\[\\]@!$&'()*+,;=%]+".toRegex()
+    // Markdown links: [Label](URL) — render Label as the clickable, styled link text
+    val mdLinkPattern = Regex("""\[([^\]]+)\]\((https?://[^)\s]+)\)""")
+    var segmentStart = 0
+    for (md in mdLinkPattern.findAll(text)) {
+        if (md.range.first > segmentStart) {
+            appendBareUrls(text.substring(segmentStart, md.range.first), urlPattern)
+        }
+        val label = md.groupValues[1]
+        val url = md.groupValues[2]
+        pushStringAnnotation("URL", url)
+        withStyle(SpanStyle(color = Color(0xFF1976D2), textDecoration = TextDecoration.Underline)) {
+            append(label)
+        }
+        pop()
+        segmentStart = md.range.last + 1
+    }
+    if (segmentStart < text.length) {
+        appendBareUrls(text.substring(segmentStart), urlPattern)
+    }
+}
+
+private fun AnnotatedString.Builder.appendBareUrls(text: String, urlPattern: Regex) {
     var lastIdx = 0
     for (match in urlPattern.findAll(text)) {
         if (match.range.first > lastIdx) {
@@ -2074,8 +2096,10 @@ fun AppDescriptionDialog(
             } else ""
         }
         val firstLinkUrl = remember(linkLines) {
-            val urlPattern = Regex("""https?://[\w\d\-._~:/?#\[\]@!$&'()*+,;=%]+""")
-            urlPattern.find(linkLines)?.value
+            // Prefer a markdown link [Label](URL) — extract URL without the closing paren
+            val mdLink = Regex("""\[[^\]]+\]\((https?://[^)\s]+)\)""").find(linkLines)
+            mdLink?.groupValues?.get(1)
+                ?: Regex("""https?://[\w\d\-._~:/?#\[\]@!$&'()*+,;=%]+""").find(linkLines)?.value
         }
         LaunchedEffect(showDescription) {
             if (showDescription) {
