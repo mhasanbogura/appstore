@@ -2085,14 +2085,16 @@ fun AppDescriptionDialog(
             val lines = descText.split("\n")
             val settingsIdx = lines.indexOfFirst { it.trim().startsWith("## ") && it.contains("Settings", ignoreCase = true) }
             if (settingsIdx >= 0 && settingsIdx + 1 < lines.size) {
-                lines.drop(settingsIdx + 1).joinToString("\n").trim()
+                // Stop at the next heading (e.g. ## Links) — only copy the Settings block
+                lines.drop(settingsIdx + 1).takeWhile { !it.trim().startsWith("## ") }.joinToString("\n").trim()
             } else ""
         }
         val linkLines = remember(descText) {
             val lines = descText.split("\n")
             val linkIdx = lines.indexOfFirst { it.trim().startsWith("## ") && it.contains("Link", ignoreCase = true) }
             if (linkIdx >= 0 && linkIdx + 1 < lines.size) {
-                lines.drop(linkIdx + 1).joinToString("\n").trim()
+                // Stop at the next heading — only take the Links section
+                lines.drop(linkIdx + 1).takeWhile { !it.trim().startsWith("## ") }.joinToString("\n").trim()
             } else ""
         }
         val firstLinkUrl = remember(linkLines) {
