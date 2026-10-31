@@ -303,8 +303,27 @@ tasks.register("releaseToGitHub") {
     }
 }
 
+tasks.register("commitAndPush") {
+    dependsOn("releaseToGitHub")
+    doLast {
+        val verFile = project.rootProject.file("version.properties")
+        val verName = verFile.useLines { lines ->
+            lines.firstOrNull { it.startsWith("versionName=") }
+                ?.substringAfter("=")?.trim() ?: "1.0.0"
+        }
+        val verCode = verFile.useLines { lines ->
+            lines.firstOrNull { it.startsWith("versionCode=") }
+                ?.substringAfter("=")?.trim() ?: "1"
+        }
+        
+        ProcessBuilder("git", "add", ".").directory(project.rootDir).start().waitFor()
+        ProcessBuilder("git", "commit", "-m", "Release v$verName - Build $verCode").directory(project.rootDir).start().waitFor()
+        ProcessBuilder("git", "push", "origin", "main").directory(project.rootDir).start().waitFor()
+    }
+}
+
 tasks.register("incrementVersion") {
-    dependsOn("publishToDrive", "releaseToGitHub")
+    dependsOn("commitAndPush")
     val verFile = project.rootProject.file("version.properties")
     doLast {
         val lines = verFile.readText().lines().toMutableList()
