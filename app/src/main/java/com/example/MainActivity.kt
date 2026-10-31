@@ -278,9 +278,39 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
 
     LaunchedEffect(syncCount) {
         if (syncCount > 0 && viewModel.isSelfUpdateAvailable()) {
-            // Immediately force self-update without dialog
-            viewModel.startSelfUpdate()
+            showSelfUpdateDialog = true
         }
+    }
+
+    if (showSelfUpdateDialog) {
+        val selfUpdateApp = viewModel.selfUpdateApp.collectAsState().value ?: viewModel.getCachedSelfUpdateApp()
+        val selfInstalledVer = installedPackages[selfUpdateApp.packageName]
+        val selfInstalledVerName = try {
+            context.packageManager.getPackageInfo(selfUpdateApp.packageName, 0).versionName
+        } catch (_: Exception) { null }
+        
+        // We do not pass 'onDismiss = { showSelfUpdateDialog = false }' here
+        // to force the user to interact with the update buttons.
+        AppDescriptionDialog(
+            showDescription = showSelfUpdateDialog,
+            onDismiss = { /* do nothing to force update */ },
+            app = selfUpdateApp,
+            installedVersion = selfInstalledVer,
+            installedVerName = selfInstalledVerName,
+            onInstallClick = { viewModel.startSelfUpdate() },
+            onLoadDescription = { app, cb -> viewModel.lazyLoadDescription(app, cb) },
+            forced = true,
+            downloadState = downloadStates[context.packageName],
+            onForcedUpdateClick = {
+                val st = downloadStates[context.packageName]
+                if (st is DownloadState.Downloaded) {
+                    viewModel.installDownloadedApp(context.packageName)
+                    return@AppDescriptionDialog
+                }
+                if (st is DownloadState.Progress || st is DownloadState.Completed) return@AppDescriptionDialog
+                viewModel.startSelfUpdate()
+            }
+        )
     }
 
     Scaffold(
