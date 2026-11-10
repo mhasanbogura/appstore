@@ -46,6 +46,7 @@ import androidx.compose.material3.pulltorefresh.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.CornerRadius
@@ -57,6 +58,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -66,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.painterResource
@@ -114,6 +117,7 @@ class MainActivity : ComponentActivity() {
     val authError by authViewModel.authError.collectAsState()
 
     var authScreen by remember { mutableStateOf("welcome") }
+    var showSelfUpdateDialog by remember { mutableStateOf(false) }
 
     MyApplicationTheme(darkTheme = effectiveDarkMode) {
         LaunchedEffect(effectiveDarkMode) {
@@ -169,7 +173,22 @@ class MainActivity : ComponentActivity() {
                 )
             }
         } else {
-            AppStoreApp(viewModel = viewModel, authViewModel = authViewModel, selectedTab = pendingTab, onTabSelected = { pendingTab = it }, darkMode = effectiveDarkMode)
+            // Blur the background (Meter Manager-style) while the update popup is showing
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (showSelfUpdateDialog) Modifier.blur(12.dp) else Modifier)
+            ) {
+                AppStoreApp(
+                    viewModel = viewModel,
+                    authViewModel = authViewModel,
+                    selectedTab = pendingTab,
+                    onTabSelected = { pendingTab = it },
+                    darkMode = effectiveDarkMode,
+                    showSelfUpdateDialog = showSelfUpdateDialog,
+                    onShowSelfUpdateDialogChange = { showSelfUpdateDialog = it }
+                )
+            }
         }
     }
 }
@@ -189,7 +208,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selectedTab: Int = 0, onTabSelected: (Int) -> Unit = {}, darkMode: Boolean = true) {
+fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selectedTab: Int = 0, onTabSelected: (Int) -> Unit = {}, darkMode: Boolean = true, showSelfUpdateDialog: Boolean = false, onShowSelfUpdateDialogChange: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val allApps by viewModel.allApps.collectAsState()
     val favoriteApps by viewModel.favoriteApps.collectAsState()
@@ -206,12 +225,10 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
     val effectiveDark = if (useDeviceThemeState) isSystemInDarkTheme() else isDarkModeState
     val iconBorderColor = if (isSystemInDarkTheme()) Color(0xFFE5E4E2) else Color(0xFF333333)
 
-    var showSelfUpdateDialog by remember { mutableStateOf(false) }
-
     fun refreshWithSelfUpdateCheck() {
         viewModel.syncSelfUpdateOnly {
             if (viewModel.isSelfUpdateAvailable()) {
-                showSelfUpdateDialog = true
+                onShowSelfUpdateDialogChange(true)
             } else {
                 viewModel.forceSync()
             }
@@ -278,7 +295,7 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
 
     LaunchedEffect(syncCount) {
         if (syncCount > 0 && viewModel.isSelfUpdateAvailable()) {
-            showSelfUpdateDialog = true
+            onShowSelfUpdateDialogChange(true)
         }
     }
 
@@ -298,6 +315,11 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
             containerColor = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(20.dp),
             text = {
+                // Meter Manager-style scrim: dim the background behind the popup
+                val popupView = LocalView.current
+                SideEffect {
+                    (popupView.parent as? DialogWindowProvider)?.window?.setDimAmount(0.5f)
+                }
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
@@ -584,7 +606,7 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
                         authViewModel = authViewModel,
                         onForceSync = { refreshWithSelfUpdateCheck() },
                         isSyncing = isSyncing,
-                        onStartSelfUpdate = { viewModel.startSelfUpdate() }
+                        onStartSelfUpdate = { onShowSelfUpdateDialogChange(true) }
                     )
                 }
             }
@@ -2944,16 +2966,15 @@ fun SettingsTab(
                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
                             if (selfDownloadState is DownloadState.Downloaded) { viewModel.installDownloadedApp(context.packageName); return@clickable }
                             if (selfDownloadState is DownloadState.Progress || selfDownloadState is DownloadState.Completed) return@clickable
-                            viewModel.forceSync {
-                                val updatedApp = viewModel.selfUpdateApp.value
-                                val updatedHasUpdate = updatedApp != null && viewModel.isUpdateAvailable(updatedApp, installedCode, installedName) && updatedApp.versionName != installedName
-                                if (updatedHasUpdate) onStartSelfUpdate()
+                            Toast.makeText(context, "Checking for Updates...", Toast.LENGTH_SHORT).show()
+                            viewModel.checkSelfUpdate { hasUpdate ->
+                                if (hasUpdate) onStartSelfUpdate()
                                 else Toast.makeText(context, "Latest version installed", Toast.LENGTH_SHORT).show()
                             }
                         }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.SystemUpdateAlt, contentDescription = "Update App", tint = MaterialTheme.colorScheme.onSurface)
+                        Icon(Icons.Default.FileDownload, contentDescription = "Update App", tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(updateText, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
                         if (hasUpdate || selfDownloadState is DownloadState.Progress) {

@@ -620,6 +620,29 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Fresh self-update check after a Drive sync. Reads the app row directly from the
+    // database (never the mapped selfUpdateApp StateFlow, which can still hold stale
+    // data right after a sync) and reports whether a newer self-version exists.
+    fun checkSelfUpdate(onResult: (Boolean) -> Unit) {
+        forceSync {
+            viewModelScope.launch {
+                val pkg = getApplication<Application>().packageName
+                val freshApp = repository.getAppByPackage(pkg)
+                    ?: _updateApps.value.firstOrNull { it.packageName == pkg }
+                val installedCode = try {
+                    androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(
+                        packageManager.getPackageInfo(pkg, 0)
+                    ).toInt()
+                } catch (_: Exception) { 0 }
+                val installedName = try {
+                    packageManager.getPackageInfo(pkg, 0).versionName ?: ""
+                } catch (_: Exception) { "" }
+                val hasUpdate = freshApp != null && isUpdateAvailable(freshApp, installedCode, installedName)
+                onResult(hasUpdate)
+            }
+        }
+    }
+
     // Trigger local download and prompt standard installation dialog
     fun startDownload(app: AppItem, retryCount: Int = 3) {
         try {
