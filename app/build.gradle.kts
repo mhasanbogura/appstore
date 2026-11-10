@@ -303,29 +303,17 @@ tasks.register("releaseToGitHub") {
     }
 }
 
-tasks.register("commitAndPush") {
-    dependsOn("releaseToGitHub")
-    doLast {
-        val verFile = project.rootProject.file("version.properties")
-        val verName = verFile.useLines { lines ->
-            lines.firstOrNull { it.startsWith("versionName=") }
-                ?.substringAfter("=")?.trim() ?: "1.0.0"
-        }
-        val verCode = verFile.useLines { lines ->
-            lines.firstOrNull { it.startsWith("versionCode=") }
-                ?.substringAfter("=")?.trim() ?: "1"
-        }
-        
-        ProcessBuilder("git", "add", ".").directory(project.rootDir).start().waitFor()
-        ProcessBuilder("git", "commit", "-m", "Release v$verName - Build $verCode").directory(project.rootDir).start().waitFor()
-        ProcessBuilder("git", "push", "origin", "main").directory(project.rootDir).start().waitFor()
-    }
-}
-
 tasks.register("incrementVersion") {
-    dependsOn("commitAndPush")
+    dependsOn("publishToDrive", "releaseToGitHub")
     val verFile = project.rootProject.file("version.properties")
     doLast {
+        // Released version (read before bumping) for the commit message
+        val releasedName = verFile.useLines { l ->
+            l.firstOrNull { it.startsWith("versionName=") }?.substringAfter("=")?.trim() ?: "1.0.0"
+        }
+        val releasedCode = verFile.useLines { l ->
+            l.firstOrNull { it.startsWith("versionCode=") }?.substringAfter("=")?.trim() ?: "1"
+        }
         val lines = verFile.readText().lines().toMutableList()
         var newCode = 1
         for (i in lines.indices) {
@@ -352,6 +340,25 @@ tasks.register("incrementVersion") {
             }
         }
         verFile.writeText(lines.joinToString("\n") + "\n")
+
+        // Auto-commit and push the release (source changes + bumped version.properties)
+        try {
+            fun runGit(vararg args: String): Int = ProcessBuilder(listOf("git") + args)
+                .directory(project.rootDir)
+                .redirectErrorStream(true)
+                .start()
+                .waitFor()
+            runGit("add", ".")
+            runGit("commit", "-m", "Release v$releasedName - Build $releasedCode")
+            val pushExit = runGit("push", "origin", "main")
+            if (pushExit == 0) {
+                logger.lifecycle("Git pushed to origin/main (Release v$releasedName - Build $releasedCode)")
+            } else {
+                logger.warn("Git push failed (exit $pushExit) — run 'git pull --rebase && git push' manually")
+            }
+        } catch (e: Exception) {
+            logger.warn("Git sync failed: ${e.message}")
+        }
     }
 }
 

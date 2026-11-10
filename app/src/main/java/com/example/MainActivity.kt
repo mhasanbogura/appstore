@@ -283,33 +283,80 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
     }
 
     if (showSelfUpdateDialog) {
+        // Compact Meter Manager-style update popup: icon, title, version text, blue Update button.
+        // Non-dismissible until the update flow runs (dialog stays open while downloading).
         val selfUpdateApp = viewModel.selfUpdateApp.collectAsState().value ?: viewModel.getCachedSelfUpdateApp()
-        val selfInstalledVer = installedPackages[selfUpdateApp.packageName]
-        val selfInstalledVerName = try {
-            context.packageManager.getPackageInfo(selfUpdateApp.packageName, 0).versionName
-        } catch (_: Exception) { null }
-        
-        // We do not pass 'onDismiss = { showSelfUpdateDialog = false }' here
-        // to force the user to interact with the update buttons.
-        AppDescriptionDialog(
-            showDescription = showSelfUpdateDialog,
-            onDismiss = { /* do nothing to force update */ },
-            app = selfUpdateApp,
-            installedVersion = selfInstalledVer,
-            installedVerName = selfInstalledVerName,
-            onInstallClick = { viewModel.startSelfUpdate() },
-            onLoadDescription = { app, cb -> viewModel.lazyLoadDescription(app, cb) },
-            forced = true,
-            downloadState = downloadStates[context.packageName],
-            onForcedUpdateClick = {
-                val st = downloadStates[context.packageName]
-                if (st is DownloadState.Downloaded) {
-                    viewModel.installDownloadedApp(context.packageName)
-                    return@AppDescriptionDialog
+        val selfDlState = downloadStates[context.packageName]
+        val selfBusy = selfDlState is DownloadState.Progress || selfDlState is DownloadState.Completed
+        AlertDialog(
+            onDismissRequest = { },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            ),
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(20.dp),
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(selfUpdateApp.iconUrl)
+                            .memoryCacheKey("icon_${selfUpdateApp.packageName}_${selfUpdateApp.versionCode}")
+                            .diskCacheKey("icon_${selfUpdateApp.packageName}_${selfUpdateApp.versionCode}")
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Update Available",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "A new version (${selfUpdateApp.versionName}) is available.",
+                        fontSize = 12.5.sp,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            when {
+                                selfDlState is DownloadState.Downloaded ->
+                                    viewModel.installDownloadedApp(context.packageName)
+                                selfBusy -> { /* keep dialog open while downloading/installing */ }
+                                else -> viewModel.startSelfUpdate()
+                            }
+                        },
+                        enabled = !selfBusy,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(44.dp)
+                    ) {
+                        Text(
+                            when {
+                                selfDlState is DownloadState.Progress -> "Downloading..."
+                                selfDlState is DownloadState.Completed -> "Installing..."
+                                else -> "Update"
+                            },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
                 }
-                if (st is DownloadState.Progress || st is DownloadState.Completed) return@AppDescriptionDialog
-                viewModel.startSelfUpdate()
-            }
+            },
+            confirmButton = { }
         )
     }
 
