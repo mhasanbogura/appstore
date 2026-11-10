@@ -233,8 +233,20 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         apps.firstOrNull { it.packageName == getApplication<Application>().packageName }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    // Guards the self-update flow against broken/absurd uploads (e.g. a test APK
+    // named v1.10.3699_build_133999.apk). A genuine release never has a
+    // versionCode >= 100,000 or a versionName segment >= 1,000.
+    fun isAbsurdSelfVersion(app: AppItem): Boolean {
+        if (app.versionCode >= 100_000) return true
+        return app.versionName.split(".").any { (it.toIntOrNull() ?: 0) >= 1000 }
+    }
+
     fun isSelfUpdateAvailable(): Boolean {
         val app = selfUpdateApp.value ?: return false
+        if (isAbsurdSelfVersion(app)) {
+            Log.w("StoreViewModel", "isSelfUpdateAvailable: ignoring absurd self row ${app.versionName}/${app.versionCode}")
+            return false
+        }
         val installedCode = _installedPackages.value[app.packageName] ?: return false
         val installedName = try {
             packageManager.getPackageInfo(app.packageName, 0).versionName ?: ""
@@ -514,11 +526,15 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
                 repository.syncSubfolderFromDrive(_driveFolderId.value, "Android", k, "Android")
                 repository.syncFromDrive(_driveFolderId.value, k, deleteStale = false)
                 val selfUpdate = allApps.value.firstOrNull { it.packageName == "com.mahmuduls.appstore" }
-                if (selfUpdate != null) {
+                if (selfUpdate != null && !isAbsurdSelfVersion(selfUpdate)) {
                     prefs.edit()
                         .putString("self_update_version_name", selfUpdate.versionName)
                         .putInt("self_update_version_code", selfUpdate.versionCode)
                         .apply()
+                } else if (selfUpdate != null) {
+                    // Never cache an absurd/broken upload as the self-update version
+                    prefs.edit().remove("self_update_version_name").remove("self_update_version_code").apply()
+                    Log.w("StoreViewModel", "Not caching absurd self row: ${selfUpdate.versionName}/${selfUpdate.versionCode}")
                 }
                 val contactMd = repository.fetchMdByName(_driveFolderId.value, "Contact.md", k)
                 if (!contactMd.isNullOrEmpty()) {
@@ -580,18 +596,22 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
 
                 _syncMessage.value = "Sync complete!"
                 val selfUpdate = allApps.value.firstOrNull { it.packageName == appStorePkg }
-                if (selfUpdate != null) {
+                if (selfUpdate != null && !isAbsurdSelfVersion(selfUpdate)) {
                     prefs.edit()
                         .putString("self_update_version_name", selfUpdate.versionName)
                         .putInt("self_update_version_code", selfUpdate.versionCode)
                         .apply()
-                    if (selfUpdate.description.startsWith("__MD_ID:")) {
-                        val mdFileId = selfUpdate.description.removePrefix("__MD_ID:")
-                        viewModelScope.launch {
-                            val content = repository.fetchMdContent(mdFileId, k)
-                            if (!content.isNullOrEmpty()) {
-                                prefs.edit().putString("cached_md_$mdFileId", content).apply()
-                            }
+                } else if (selfUpdate != null) {
+                    // Never cache an absurd/broken upload as the self-update version
+                    prefs.edit().remove("self_update_version_name").remove("self_update_version_code").apply()
+                    Log.w("StoreViewModel", "Not caching absurd self row: ${selfUpdate.versionName}/${selfUpdate.versionCode}")
+                }
+                if (selfUpdate != null && selfUpdate.description.startsWith("__MD_ID:")) {
+                    val mdFileId = selfUpdate.description.removePrefix("__MD_ID:")
+                    viewModelScope.launch {
+                        val content = repository.fetchMdContent(mdFileId, k)
+                        if (!content.isNullOrEmpty()) {
+                            prefs.edit().putString("cached_md_$mdFileId", content).apply()
                         }
                     }
                 }
@@ -637,7 +657,9 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
                 val installedName = try {
                     packageManager.getPackageInfo(pkg, 0).versionName ?: ""
                 } catch (_: Exception) { "" }
-                val hasUpdate = freshApp != null && isUpdateAvailable(freshApp, installedCode, installedName)
+                val absurd = freshApp != null && isAbsurdSelfVersion(freshApp)
+                val hasUpdate = freshApp != null && !absurd && isUpdateAvailable(freshApp, installedCode, installedName)
+                Log.d("StoreViewModel", "checkSelfUpdate: fresh=${freshApp?.versionName}/${freshApp?.versionCode} installed=$installedName/$installedCode absurd=$absurd -> hasUpdate=$hasUpdate")
                 onResult(hasUpdate)
             }
         }
@@ -1184,7 +1206,7 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         // Also check app store self-update from update folder
         val selfPkg = "com.mahmuduls.appstore"
         val selfUpdate = _updateApps.value.firstOrNull { it.packageName == selfPkg }
-        if (selfUpdate != null && (installed[selfPkg] ?: 0) < selfUpdate.versionCode) {
+        if (selfUpdate != null && !isAbsurdSelfVersion(selfUpdate) && (installed[selfPkg] ?: 0) < selfUpdate.versionCode) {
             if (notifiedUpdates.add(selfPkg)) {
                 NotificationHelper.showUpdateNotification(
                     context = getApplication(),

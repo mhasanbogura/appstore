@@ -332,6 +332,9 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
                             .crossfade(true)
                             .build(),
                         contentDescription = null,
+                        placeholder = androidx.compose.ui.res.painterResource(R.mipmap.ic_launcher),
+                        error = androidx.compose.ui.res.painterResource(R.mipmap.ic_launcher),
+                        fallback = androidx.compose.ui.res.painterResource(R.mipmap.ic_launcher),
                         modifier = Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(8.dp))
@@ -349,7 +352,7 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
                         "A new version (${selfUpdateApp.versionName}) is available.",
                         fontSize = 12.5.sp,
                         textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(
@@ -362,13 +365,18 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
                             }
                         },
                         enabled = !selfBusy,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF2563EB),
+                            contentColor = Color.White,
+                            disabledContainerColor = Color(0xFF2563EB).copy(alpha = 0.6f),
+                            disabledContentColor = Color.White
+                        ),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().height(44.dp)
                     ) {
                         Text(
                             when {
-                                selfDlState is DownloadState.Progress -> "Downloading..."
+                                selfDlState is DownloadState.Progress -> "Downloading... ${(selfDlState.percentage * 100).toInt()}%"
                                 selfDlState is DownloadState.Completed -> "Installing..."
                                 else -> "Update"
                             },
@@ -2954,7 +2962,7 @@ fun SettingsTab(
                     val selfDownloadState = downloadStates[context.packageName]
                     val installedCode = try { val info = context.packageManager.getPackageInfo(context.packageName, 0); androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info).toInt() } catch (_: Exception) { 0 }
                     val installedName = try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
-                    val hasUpdate = selfUpdateApp != null && viewModel.isUpdateAvailable(selfUpdateApp!!, installedCode, installedName) && selfUpdateApp!!.versionName != installedName
+                    val hasUpdate = selfUpdateApp != null && !viewModel.isAbsurdSelfVersion(selfUpdateApp!!) && viewModel.isUpdateAvailable(selfUpdateApp!!, installedCode, installedName)
                     val updateText = when {
                         selfDownloadState is DownloadState.Progress -> "Downloading... ${(selfDownloadState.percentage * 100).toInt()}%"
                         selfDownloadState is DownloadState.Downloaded -> "Install Update"
@@ -2966,15 +2974,15 @@ fun SettingsTab(
                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
                             if (selfDownloadState is DownloadState.Downloaded) { viewModel.installDownloadedApp(context.packageName); return@clickable }
                             if (selfDownloadState is DownloadState.Progress || selfDownloadState is DownloadState.Completed) return@clickable
-                            Toast.makeText(context, "Checking for Updates...", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Checking for Updates...", Toast.LENGTH_LONG).show()
                             viewModel.checkSelfUpdate { hasUpdate ->
                                 if (hasUpdate) onStartSelfUpdate()
-                                else Toast.makeText(context, "Latest version installed", Toast.LENGTH_SHORT).show()
+                                else Toast.makeText(context, "You are using the latest version.", Toast.LENGTH_LONG).show()
                             }
                         }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.FileDownload, contentDescription = "Update App", tint = MaterialTheme.colorScheme.onSurface)
+                        Icon(Icons.Default.SystemUpdateAlt, contentDescription = "Update App", tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(updateText, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
                         if (hasUpdate || selfDownloadState is DownloadState.Progress) {
