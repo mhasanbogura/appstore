@@ -1198,6 +1198,8 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     // Scan database & check what's installed to locate any pending updates and raise Android notifications
     fun checkForUpdatesAndNotify() {
         if (!_autoUpdateCheck.value) return
+        // Honor the global Update.md switch (_update_off.md) - same gate the UI uses
+        if (!appStorePrefs.getBoolean("update_check_enabled", true)) return
         val installed = _installedPackages.value
         val allAvailableApps = allApps.value
         
@@ -1219,6 +1221,8 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
 
         for (app in allAvailableApps) {
             if (!installed.containsKey(app.packageName)) continue
+            // Per-app Update.md config: apps listed there must never notify either
+            if (!app.updateCheck) continue
             try {
                 val pkgInfo = getApplication<Application>().packageManager.getPackageInfo(app.packageName, 0)
                 val installedVerName = pkgInfo.versionName ?: ""

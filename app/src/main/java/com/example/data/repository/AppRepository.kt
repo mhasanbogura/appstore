@@ -72,6 +72,11 @@ class AppRepository(
     suspend fun fetchMdContent(mdFileId: String, apiKey: String): String? = withContext(Dispatchers.IO) {
         // Retry up to 3x: a single transient failure here silently disabled the whole
         // Update.md config (empty config → all updates stay ON)
+        val prefs = context.getSharedPreferences("drive_store_prefs", Context.MODE_PRIVATE)
+        val cacheKey = "md_cache_$mdFileId"
+        // Google serves HTML ("automated queries" block page / interstitial) with HTTP 200
+        // or 403 when it rate-limits downloads - never treat that as md content.
+        fun isHtmlPage(s: String) = s.startsWith("<!DOCTYPE", ignoreCase = true) || s.startsWith("<html", ignoreCase = true)
         var lastError: String? = null
         repeat(3) { attempt ->
             try {
@@ -81,8 +86,11 @@ class AppRepository(
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
                     val body = response.body?.string()?.trim()
-                    if (!body.isNullOrEmpty()) return@withContext body
-                    lastError = "empty body"
+                    if (!body.isNullOrEmpty() && !isHtmlPage(body)) {
+                        prefs.edit().putString(cacheKey, body).apply()
+                        return@withContext body
+                    }
+                    lastError = if (body.isNullOrEmpty()) "empty body" else "html interstitial"
                 } else {
                     lastError = "HTTP ${response.code}"
                 }
@@ -90,6 +98,35 @@ class AppRepository(
                 lastError = e.toString()
             }
             if (attempt < 2) kotlinx.coroutines.delay(700L)
+        }
+        // Fallback: the plain Drive download endpoint often still works when the API
+        // media endpoint is rate-limited (HTTP 403 "automated queries" block page).
+        repeat(2) { attempt ->
+            try {
+                val url = "https://drive.google.com/uc?export=download&id=$mdFileId"
+                val response = OkHttpClient().newCall(okhttp3.Request.Builder().url(url).build()).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string()?.trim()
+                    if (!body.isNullOrEmpty() && !isHtmlPage(body)) {
+                        prefs.edit().putString(cacheKey, body).apply()
+                        Log.d("UpdateConfig", "fetchMdContent: got $mdFileId via drive.google.com/uc fallback")
+                        return@withContext body
+                    }
+                    lastError = if (body.isNullOrEmpty()) "uc empty body" else "uc html interstitial"
+                } else {
+                    lastError = "uc HTTP ${response.code}"
+                }
+            } catch (e: Exception) {
+                lastError = "uc $e"
+            }
+            if (attempt < 1) kotlinx.coroutines.delay(700L)
+        }
+        // Last resort: most recent successfully fetched copy, so a transient block never
+        // silently re-enables updates that were deliberately turned off via Update.md.
+        val cached = prefs.getString(cacheKey, null)
+        if (!cached.isNullOrEmpty()) {
+            Log.w("UpdateConfig", "fetchMdContent FAILED for $mdFileId ($lastError) - using cached copy (len=${cached.length})")
+            return@withContext cached
         }
         Log.w("UpdateConfig", "fetchMdContent FAILED for $mdFileId after 3 tries: $lastError")
         null
@@ -112,6 +149,34 @@ class AppRepository(
         } catch (_: Exception) { null }
     }
 
+    // Look for Update.md in a specific folder via a metadata-only query (no media
+    // download, so it works even when content fetches are rate-limited).
+    private suspend fun findUpdateConfigInFolder(folderId: String, apiKey: String): com.example.data.remote.DriveFile? = withContext(Dispatchers.IO) {
+        try {
+            val client = OkHttpClient()
+            val query = "'$folderId' in parents and name='Update.md' and trashed=false"
+            val listUrl = "https://www.googleapis.com/drive/v3/files?q=${java.net.URLEncoder.encode(query, "UTF-8")}&key=$apiKey&fields=files(id,name,mimeType)"
+            val listResponse = client.newCall(okhttp3.Request.Builder().url(listUrl).build()).execute()
+            if (!listResponse.isSuccessful) {
+                Log.w("UpdateConfig", "findUpdateConfigInFolder: list HTTP ${listResponse.code} for folder $folderId")
+                return@withContext null
+            }
+            val files = org.json.JSONObject(listResponse.body?.string() ?: return@withContext null)
+                .optJSONArray("files") ?: return@withContext null
+            if (files.length() == 0) return@withContext null
+            val obj = files.getJSONObject(0)
+            Log.d("UpdateConfig", "findUpdateConfigInFolder: found Update.md id=${obj.getString("id")} in folder $folderId")
+            com.example.data.remote.DriveFile(
+                id = obj.getString("id"),
+                name = obj.optString("name", "Update.md"),
+                mimeType = obj.optString("mimeType", "text/markdown")
+            )
+        } catch (e: Exception) {
+            Log.w("UpdateConfig", "findUpdateConfigInFolder failed for folder $folderId: $e")
+            null
+        }
+    }
+
     // Look for Update.md in the PARENT of the given folder. The shared folders
     // ("Android", "Windows", ...) are subfolders of the main Drive folder where
     // Update.md lives, so without this the per-app update config was never seen
@@ -126,29 +191,21 @@ class AppRepository(
                 return@withContext null
             }
             val parents = org.json.JSONObject(metaResponse.body?.string() ?: return@withContext null)
-                .optJSONArray("parents") ?: return@withContext null
-            if (parents.length() == 0) return@withContext null
+                .optJSONArray("parents")
+            if (parents == null) {
+                // Drive hides the parents field for this access mode - callers that know
+                // the parent folder id must pass it directly (knownParentFolderId).
+                Log.w("UpdateConfig", "findParentUpdateConfig: no parents field returned for folder $folderId - parent config needs knownParentFolderId")
+                return@withContext null
+            }
+            if (parents.length() == 0) {
+                Log.d("UpdateConfig", "findParentUpdateConfig: folder $folderId has no parent")
+                return@withContext null
+            }
             val parent = parents.getString(0)
-            val query = "'$parent' in parents and name='Update.md' and trashed=false"
-            val listUrl = "https://www.googleapis.com/drive/v3/files?q=${java.net.URLEncoder.encode(query, "UTF-8")}&key=$apiKey&fields=files(id,name,mimeType)"
-            val listResponse = client.newCall(okhttp3.Request.Builder().url(listUrl).build()).execute()
-            if (!listResponse.isSuccessful) {
-                Log.w("UpdateConfig", "findParentUpdateConfig: list HTTP ${listResponse.code} for parent $parent")
-                return@withContext null
-            }
-            val files = org.json.JSONObject(listResponse.body?.string() ?: return@withContext null)
-                .optJSONArray("files") ?: return@withContext null
-            if (files.length() == 0) {
-                Log.d("UpdateConfig", "findParentUpdateConfig: no Update.md in parent $parent of folder $folderId")
-                return@withContext null
-            }
-            val obj = files.getJSONObject(0)
-            Log.d("UpdateConfig", "findParentUpdateConfig: found Update.md id=${obj.getString("id")} in parent $parent")
-            com.example.data.remote.DriveFile(
-                id = obj.getString("id"),
-                name = obj.optString("name", "Update.md"),
-                mimeType = obj.optString("mimeType", "text/markdown")
-            )
+            findUpdateConfigInFolder(parent, apiKey)?.let { return@withContext it }
+            Log.d("UpdateConfig", "findParentUpdateConfig: no Update.md in parent $parent of folder $folderId")
+            null
         } catch (e: Exception) {
             Log.w("UpdateConfig", "findParentUpdateConfig failed for folder $folderId: $e")
             null
@@ -247,7 +304,7 @@ class AppRepository(
         try {
             val subId = findSubfolderId(parentFolderId, folderName, apiKey)
             if (subId != null) {
-                val apps = syncDriveFolder(subId, apiKey, insertIntoDb = true, platform = platform, deleteStale = false)
+                val apps = syncDriveFolder(subId, apiKey, insertIntoDb = true, platform = platform, deleteStale = false, knownParentFolderId = parentFolderId)
                 Result.success(apps)
             } else {
                 Result.success(emptyList())
@@ -271,7 +328,7 @@ class AppRepository(
             val folderQuery = "'$parentFolderId' in parents and mimeType = 'application/vnd.google-apps.folder' and name = 'update' and trashed = false"
             val folderResponse = driveService.listFiles(query = folderQuery, fields = "files(id, name)", apiKey = apiKey)
             val updateFolder = folderResponse.files.firstOrNull() ?: return@withContext emptyList()
-            syncDriveFolder(updateFolder.id, apiKey, insertIntoDb = false)
+            syncDriveFolder(updateFolder.id, apiKey, insertIntoDb = false, knownParentFolderId = parentFolderId)
         } catch (e: Exception) {
             Log.e("AppRepository", "Updates sync failed", e)
             emptyList()
@@ -394,7 +451,7 @@ class AppRepository(
         }
     }
 
-    private suspend fun syncDriveFolder(folderId: String, apiKey: String, insertIntoDb: Boolean, platform: String = "Android", deleteStale: Boolean = true): List<AppItem> {
+    private suspend fun syncDriveFolder(folderId: String, apiKey: String, insertIntoDb: Boolean, platform: String = "Android", deleteStale: Boolean = true, knownParentFolderId: String? = null): List<AppItem> {
         // Get all files (APKs + images + markdown) with pagination
         val queryStr = "'$folderId' in parents and trashed = false"
         val allFiles = mutableListOf<com.example.data.remote.DriveFile>()
@@ -436,6 +493,9 @@ class AppRepository(
         // Apps not listed default to "on"
         val configFile = if (platform != "Android") null else
             allFiles.find { it.name.equals("Update.md", ignoreCase = true) }
+                // Subfolder syncs know their parent (where Update.md lives) - use that
+                // directly: Drive hides the `parents` field from files.get here.
+                ?: knownParentFolderId?.takeIf { it.isNotBlank() }?.let { findUpdateConfigInFolder(it, apiKey) }
                 ?: findParentUpdateConfig(folderId, apiKey)
         Log.d("UpdateConfig", "syncDriveFolder folder=$folderId platform=$platform files=${allFiles.size} apks=${appFiles.size} configFile=${configFile?.id ?: "NONE"}")
         val updateDisabledPackages = if (configFile != null) {
