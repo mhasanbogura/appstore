@@ -241,19 +241,6 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
         return app.versionName.split(".").any { (it.toIntOrNull() ?: 0) >= 1000 }
     }
 
-    fun isSelfUpdateAvailable(): Boolean {
-        val app = selfUpdateApp.value ?: return false
-        if (isAbsurdSelfVersion(app)) {
-            Log.w("StoreViewModel", "isSelfUpdateAvailable: ignoring absurd self row ${app.versionName}/${app.versionCode}")
-            return false
-        }
-        val installedCode = _installedPackages.value[app.packageName] ?: return false
-        val installedName = try {
-            packageManager.getPackageInfo(app.packageName, 0).versionName ?: ""
-        } catch (_: Exception) { "" }
-        return isUpdateAvailable(app, installedCode, installedName)
-    }
-
     fun startSelfUpdate() {
         val app = selfUpdateApp.value ?: return
         startDownload(app)
@@ -645,24 +632,31 @@ class StoreViewModel(application: Application) : AndroidViewModel(application) {
     // data right after a sync) and reports whether a newer self-version exists.
     fun checkSelfUpdate(onResult: (Boolean) -> Unit) {
         forceSync {
-            viewModelScope.launch {
-                val pkg = getApplication<Application>().packageName
-                val freshApp = repository.getAppByPackage(pkg)
-                    ?: _updateApps.value.firstOrNull { it.packageName == pkg }
-                val installedCode = try {
-                    androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(
-                        packageManager.getPackageInfo(pkg, 0)
-                    ).toInt()
-                } catch (_: Exception) { 0 }
-                val installedName = try {
-                    packageManager.getPackageInfo(pkg, 0).versionName ?: ""
-                } catch (_: Exception) { "" }
-                val absurd = freshApp != null && isAbsurdSelfVersion(freshApp)
-                val hasUpdate = freshApp != null && !absurd && isUpdateAvailable(freshApp, installedCode, installedName)
-                Log.d("StoreViewModel", "checkSelfUpdate: fresh=${freshApp?.versionName}/${freshApp?.versionCode} installed=$installedName/$installedCode absurd=$absurd -> hasUpdate=$hasUpdate")
-                onResult(hasUpdate)
-            }
+            viewModelScope.launch { onResult(readSelfUpdateState()) }
         }
+    }
+
+    // Same fresh check WITHOUT a sync - used right after any sync completed.
+    fun checkSelfUpdateNow(onResult: (Boolean) -> Unit) {
+        viewModelScope.launch { onResult(readSelfUpdateState()) }
+    }
+
+    private suspend fun readSelfUpdateState(): Boolean {
+        val pkg = getApplication<Application>().packageName
+        val freshApp = repository.getAppByPackage(pkg)
+            ?: _updateApps.value.firstOrNull { it.packageName == pkg }
+        val installedCode = try {
+            androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(
+                packageManager.getPackageInfo(pkg, 0)
+            ).toInt()
+        } catch (_: Exception) { 0 }
+        val installedName = try {
+            packageManager.getPackageInfo(pkg, 0).versionName ?: ""
+        } catch (_: Exception) { "" }
+        val absurd = freshApp != null && isAbsurdSelfVersion(freshApp)
+        val hasUpdate = freshApp != null && !absurd && isUpdateAvailable(freshApp, installedCode, installedName)
+        Log.d("StoreViewModel", "readSelfUpdateState: fresh=${freshApp?.versionName}/${freshApp?.versionCode} installed=$installedName/$installedCode absurd=$absurd -> hasUpdate=$hasUpdate")
+        return hasUpdate
     }
 
     // Trigger local download and prompt standard installation dialog

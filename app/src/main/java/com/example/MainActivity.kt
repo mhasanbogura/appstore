@@ -226,12 +226,11 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
     val iconBorderColor = if (isSystemInDarkTheme()) Color(0xFFE5E4E2) else Color(0xFF333333)
 
     fun refreshWithSelfUpdateCheck() {
-        viewModel.syncSelfUpdateOnly {
-            if (viewModel.isSelfUpdateAvailable()) {
-                onShowSelfUpdateDialogChange(true)
-            } else {
-                viewModel.forceSync()
-            }
+        // Check for a self-update FIRST with a fresh DB read (never the possibly-stale
+        // StateFlow). The forceSync inside checkSelfUpdate also refreshes every other
+        // app, so the "no update" case needs no extra sync pass.
+        viewModel.checkSelfUpdate { hasUpdate ->
+            if (hasUpdate) onShowSelfUpdateDialogChange(true)
         }
     }
 
@@ -294,8 +293,10 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
     }
 
     LaunchedEffect(syncCount) {
-        if (syncCount > 0 && viewModel.isSelfUpdateAvailable()) {
-            onShowSelfUpdateDialogChange(true)
+        if (syncCount > 0) {
+            viewModel.checkSelfUpdateNow { hasUpdate ->
+                if (hasUpdate) onShowSelfUpdateDialogChange(true)
+            }
         }
     }
 
@@ -324,6 +325,19 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                 ) {
+                    // Adaptive launcher icons (mipmap-anydpi-v26 XML) crash Compose's
+                    // painterResource ("Only VectorDrawables and rasterized asset types
+                    // are supported") - rasterize the Drawable once into a BitmapPainter.
+                    val fallbackContext = LocalContext.current
+                    val launcherFallback = remember {
+                        val d = androidx.core.content.ContextCompat.getDrawable(fallbackContext, R.mipmap.ic_launcher)
+                        if (d != null) {
+                            val bmp = android.graphics.Bitmap.createBitmap(128, 128, android.graphics.Bitmap.Config.ARGB_8888)
+                            d.setBounds(0, 0, 128, 128)
+                            d.draw(android.graphics.Canvas(bmp))
+                            androidx.compose.ui.graphics.painter.BitmapPainter(bmp.asImageBitmap())
+                        } else null
+                    }
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
                             .data(selfUpdateApp.iconUrl)
@@ -332,9 +346,9 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
                             .crossfade(true)
                             .build(),
                         contentDescription = null,
-                        placeholder = androidx.compose.ui.res.painterResource(R.mipmap.ic_launcher),
-                        error = androidx.compose.ui.res.painterResource(R.mipmap.ic_launcher),
-                        fallback = androidx.compose.ui.res.painterResource(R.mipmap.ic_launcher),
+                        placeholder = launcherFallback,
+                        error = launcherFallback,
+                        fallback = launcherFallback,
                         modifier = Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(8.dp))
