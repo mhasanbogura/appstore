@@ -2842,12 +2842,12 @@ fun SettingsTab(
                     ) {
                         Icon(Icons.Filled.Logout, contentDescription = "Sign Out", tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text("Log out", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        Text("Sign out", fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
                         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (showLogoutConfirm) {
                         LaunchedEffect(showLogoutConfirm) {
-                            android.app.AlertDialog.Builder(context).setTitle("Log out").setMessage("Are you sure you want to log out?").setPositiveButton("Log out") { _, _ -> showLogoutConfirm = false; authViewModel.signOut() }.setNegativeButton("Cancel") { _, _ -> showLogoutConfirm = false }.setOnDismissListener { showLogoutConfirm = false }.show()
+                            android.app.AlertDialog.Builder(context).setTitle("Sign out").setMessage("Are you sure you want to sign out?").setPositiveButton("Sign out") { _, _ -> showLogoutConfirm = false; authViewModel.signOut() }.setNegativeButton("Cancel") { _, _ -> showLogoutConfirm = false }.setOnDismissListener { showLogoutConfirm = false }.show()
                         }
                     }
 
