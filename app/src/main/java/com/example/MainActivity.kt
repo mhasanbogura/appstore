@@ -404,6 +404,17 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
         )
     }
 
+    // Icon-less custom toast pill (bottom-center) for the update-flow messages.
+    // The ROM-styled system Toast always renders the app icon, which is unwanted here.
+    var toastText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(toastText) {
+        if (toastText != null) {
+            delay(3400L)
+            toastText = null
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         bottomBar = {
             val navSelectedColor = if (darkMode) Color.White else Color.Black
@@ -628,9 +639,32 @@ fun AppStoreApp(viewModel: StoreViewModel, authViewModel: AuthViewModel, selecte
                         authViewModel = authViewModel,
                         onForceSync = { refreshWithSelfUpdateCheck() },
                         isSyncing = isSyncing,
-                        onStartSelfUpdate = { onShowSelfUpdateDialogChange(true) }
+                        onStartSelfUpdate = { onShowSelfUpdateDialogChange(true) },
+                        onShowToast = { toastText = it }
                     )
                 }
+            }
+        }
+    }
+
+        // Bottom-center toast pill: text only, no icon (system toasts add one).
+        AnimatedVisibility(
+            visible = toastText != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 100.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = Color(0xF0222222),
+                shadowElevation = 6.dp
+            ) {
+                Text(
+                    text = toastText ?: "",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                )
             }
         }
     }
@@ -2585,7 +2619,8 @@ fun SettingsTab(
     authViewModel: AuthViewModel,
     onForceSync: () -> Unit,
     isSyncing: Boolean,
-    onStartSelfUpdate: () -> Unit = {}
+    onStartSelfUpdate: () -> Unit = {},
+    onShowToast: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val isDarkMode by viewModel.isDarkMode.collectAsState()
@@ -2988,10 +3023,10 @@ fun SettingsTab(
                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
                             if (selfDownloadState is DownloadState.Downloaded) { viewModel.installDownloadedApp(context.packageName); return@clickable }
                             if (selfDownloadState is DownloadState.Progress || selfDownloadState is DownloadState.Completed) return@clickable
-                            Toast.makeText(context, "Checking for Updates...", Toast.LENGTH_LONG).show()
+                            onShowToast("Checking for Updates...")
                             viewModel.checkSelfUpdate { hasUpdate ->
                                 if (hasUpdate) onStartSelfUpdate()
-                                else Toast.makeText(context, "You are using the latest version.", Toast.LENGTH_LONG).show()
+                                else onShowToast("You are using the latest version.")
                             }
                         }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
