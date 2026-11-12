@@ -2612,6 +2612,63 @@ private data class DownloadedAppInfo(
 )
 
 
+// Meter Manager-style toggle - mirrors MM's .toggle CSS: 46x26dp pill track
+// (#ccc off / blue on), white 20dp knob at 3dp inset sliding 20dp, 250ms animation.
+@Composable
+fun MeterToggle(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    showThemeIcons: Boolean = false
+) {
+    val trackColor by animateColorAsState(
+        targetValue = if (checked) {
+            if (isSystemInDarkTheme()) Color(0xFF3B7BDD) else Color(0xFF0B3D91)
+        } else Color(0xFFCCCCCC),
+        animationSpec = tween(250),
+        label = "toggleTrack"
+    )
+    val knobOffset by animateDpAsState(
+        targetValue = if (checked) 23.dp else 3.dp,
+        animationSpec = tween(250),
+        label = "toggleKnob"
+    )
+    Box(
+        modifier = modifier
+            .size(width = 46.dp, height = 26.dp)
+            .clip(RoundedCornerShape(50))
+            .background(trackColor)
+            .clickable { onCheckedChange(!checked) }
+    ) {
+        if (showThemeIcons) {
+            // Meter Manager shows a sun when off (right side) and a moon when on (left side)
+            AnimatedVisibility(
+                visible = !checked,
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(150)),
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 5.dp)
+            ) {
+                Icon(Icons.Default.WbSunny, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+            }
+            AnimatedVisibility(
+                visible = checked,
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(150)),
+                modifier = Modifier.align(Alignment.CenterStart).padding(start = 5.dp)
+            ) {
+                Icon(Icons.Default.Nightlight, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+            }
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .offset(x = knobOffset)
+                .size(20.dp)
+                .background(Color.White, CircleShape)
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsTab(
@@ -2720,7 +2777,7 @@ fun SettingsTab(
                             Spacer(modifier = Modifier.width(12.dp))
                             Text("Device Theme", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         }
-                        Switch(checked = useDeviceTheme, onCheckedChange = { enabled -> viewModel.setUseDeviceTheme(enabled); if (enabled) viewModel.setDarkMode(false) })
+                        MeterToggle(checked = useDeviceTheme, onCheckedChange = { enabled -> viewModel.setUseDeviceTheme(enabled); if (enabled) viewModel.setDarkMode(false) })
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
@@ -2732,7 +2789,7 @@ fun SettingsTab(
                             Spacer(modifier = Modifier.width(12.dp))
                             Text("OLED Theme", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         }
-                        Switch(checked = isDarkMode, onCheckedChange = { enabled -> viewModel.setDarkMode(enabled); if (enabled) viewModel.setUseDeviceTheme(false) })
+                        MeterToggle(checked = isDarkMode, onCheckedChange = { enabled -> viewModel.setDarkMode(enabled); if (enabled) viewModel.setUseDeviceTheme(false) }, showThemeIcons = true)
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
@@ -2756,7 +2813,7 @@ fun SettingsTab(
                                     }
                                 }
                             }
-                            Switch(checked = autoDeleteDownloads, onCheckedChange = { viewModel.setAutoDeleteDownloads(it) })
+                            MeterToggle(checked = autoDeleteDownloads, onCheckedChange = { viewModel.setAutoDeleteDownloads(it) })
                         }
                         if (showDeleteDaysPicker.value) {
                             LaunchedEffect(showDeleteDaysPicker.value) {
@@ -2809,7 +2866,7 @@ fun SettingsTab(
                                 )
                             }
                         }
-                        Switch(checked = autoDownloadUpdates, onCheckedChange = { viewModel.setAutoDownloadUpdates(it) })
+                        MeterToggle(checked = autoDownloadUpdates, onCheckedChange = { viewModel.setAutoDownloadUpdates(it) })
                     }
                     if (showIntervalPicker.value) {
                         LaunchedEffect(showIntervalPicker.value) {
