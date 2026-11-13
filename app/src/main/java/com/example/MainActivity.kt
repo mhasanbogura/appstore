@@ -2619,11 +2619,12 @@ fun MeterToggle(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    showThemeIcons: Boolean = false
+    showThemeIcons: Boolean = false,
+    darkTheme: Boolean = isSystemInDarkTheme()
 ) {
     val trackColor by animateColorAsState(
         targetValue = if (checked) {
-            if (isSystemInDarkTheme()) Color(0xFF3B7BDD) else Color(0xFF0B3D91)
+            if (darkTheme) Color(0xFF3B7BDD) else Color(0xFF0B3D91)
         } else Color(0xFFCCCCCC),
         animationSpec = tween(250),
         label = "toggleTrack"
@@ -2648,7 +2649,7 @@ fun MeterToggle(
                 exit = fadeOut(tween(150)),
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 5.dp)
             ) {
-                Icon(Icons.Default.WbSunny, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                Icon(Icons.Outlined.WbSunny, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
             }
             AnimatedVisibility(
                 visible = checked,
@@ -2656,7 +2657,7 @@ fun MeterToggle(
                 exit = fadeOut(tween(150)),
                 modifier = Modifier.align(Alignment.CenterStart).padding(start = 5.dp)
             ) {
-                Icon(Icons.Default.Nightlight, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                Icon(Icons.Default.DarkMode, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
             }
         }
         Box(
